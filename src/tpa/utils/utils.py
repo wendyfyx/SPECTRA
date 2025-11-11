@@ -2,6 +2,7 @@ import sys
 import logging
 import numpy as np
 from pathlib import Path
+from importlib.resources import files
 
 def setup_logging():
     """Setup logging using default config"""
@@ -14,6 +15,7 @@ def setup_logging():
     )
 
 def get_t1_mni_path():
+    """Get filename of the T1 MNI template"""
     return str(files("buan_weighted_mean") / "assets" / "mni_icbm152_t1_tal_nlin_asym_09a_masked.nii.gz")
 
 def file_exists(file_path: str) -> bool:
