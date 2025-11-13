@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import plotly.graph_objects as go
 
 def alternating_colors(s_index=None, r_index=None, pattern='viridis', valid_mask=None):
     """
@@ -63,3 +64,63 @@ def alternating_colors(s_index=None, r_index=None, pattern='viridis', valid_mask
             colors[i] = mpl.colors.to_rgb(pattern[idx_array[i] % 2]) if valid_mask[i] else gray
 
     return [tuple(c) for c in colors]
+
+
+def plot_uvecs(centroids, r_vecs, r_len=5):
+    """
+    Plot the centroid and signed radial vectors (+r and -r) along the bundle using Plotly.
+    """
+    fig = go.Figure()
+
+    centroids = [centroids] if centroids.ndim == 2 else centroids
+    r_vecs = [r_vecs] if r_vecs.ndim == 2 else r_vecs
+
+    for i, (centroid, r_vec) in enumerate(zip(centroids, r_vecs)):
+
+        ns = len(centroid)
+        r_pos = centroid + r_vec * r_len
+        r_neg = centroid - r_vec * r_len
+        
+    
+        # Centroid line
+        fig.add_trace(go.Scatter3d(
+            x=centroid[:,0], y=centroid[:,1], z=centroid[:,2],
+            mode='lines+markers',
+            line=dict(color='black', width=4),
+            marker=dict(size=3),
+            name='Centroid'
+        ))
+    
+        # +r arrows
+        for i in range(ns):
+            fig.add_trace(go.Scatter3d(
+                x=[centroid[i,0], r_pos[i,0]],
+                y=[centroid[i,1], r_pos[i,1]],
+                z=[centroid[i,2], r_pos[i,2]],
+                mode='lines',
+                line=dict(color='blue', width=3),
+                name='+r' if i==0 else None,  # only label first
+                showlegend=i==0
+            ))
+        
+        # -r arrows
+        for i in range(ns):
+            fig.add_trace(go.Scatter3d(
+                x=[centroid[i,0], r_neg[i,0]],
+                y=[centroid[i,1], r_neg[i,1]],
+                z=[centroid[i,2], r_neg[i,2]],
+                mode='lines',
+                line=dict(color='red', width=3),
+                name='-r' if i==0 else None,
+                showlegend=i==0
+            ))
+        
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='X', yaxis_title='Y', zaxis_title='Z',
+            aspectmode='data'
+        ),
+        title="Bundle centroid and signed radial vectors (+r:blue, -r:red)"
+    )
+    
+    fig.show()

@@ -165,6 +165,8 @@ def parametrize_bundle(bundle, centroid, u_vecs, r_edges):
         Along-tract segment indices
     r_index : (n_points,)
         Radial bin indices
+    s_dist : (n_points, )
+        Distance to the closest point on the centroid
     valid_mask : (n_points,)
         Boolean mask marking valid points. Points are discarded 
         if they are outside of the atlas radial rage or if the
@@ -173,7 +175,8 @@ def parametrize_bundle(bundle, centroid, u_vecs, r_edges):
     points = bundle.get_data()
 
     # Get along-tract segments
-    _, s_index = cKDTree(centroid).query(points, k=1)
+    s_dist, s_index = cKDTree(centroid).query(points, k=1)
+    ns = len(centroid)
 
     # Get radial bins
     delta = points - centroid[s_index]
@@ -187,19 +190,21 @@ def parametrize_bundle(bundle, centroid, u_vecs, r_edges):
 
     # Mask sparse bins based on point counts
     bin_ids = s_index * nr + r_index
-    counts = np.bincount(bin_ids, minlength=centroid.shape[0] * nr)
-    thresh = np.median(counts) * 0.1
+    counts = np.bincount(bin_ids, minlength=ns * nr)
+    thresh = np.clip(np.median(counts) * 0.5, 50, 200)
     print(thresh)
     sparse_bins = np.where(counts < thresh)[0]
     if len(sparse_bins) > 0:
         mask_sparse = np.isin(bin_ids, sparse_bins)
         valid_mask[mask_sparse] = False
 
-    return s_index, r_index, valid_mask
+    counts = counts.reshape((ns, nr))
 
-def prepare_buan_bundle_pairs(org_bundle, rec_bundle, use_even_points=True):
+    return s_index, r_index, s_dist, valid_mask, counts
+
+def prepare_bundle_pairs(org_bundle, rec_bundle, use_even_points=True):
     """
-    BUAN requires bundle in the native space and MNI space
+    TPA and BUAN profiling requires bundle in the native space and MNI space
     Resample both bundle such that they have the same number of points evenly distributed
     per streamline for creating segments. If both bundles have the same number of points and
     `use_even_points=False`, resampling is not performed.
@@ -231,28 +236,81 @@ def prepare_buan_bundle_pairs(org_bundle, rec_bundle, use_even_points=True):
     return ArraySequence(org_bundle_rsp), ArraySequence(rec_bundle_rsp)
 
 
-def grid_profile(org_bundle, s_index, r_index, valid_mask,
-                scalar_map, scalar_affine):
+def buan_profile(org_bundle, s_index, s_dist,
+                 scalar_map, scalar_affine, 
+                 epsilon=1e-8):
     """
-    Compute mean FA per (s,r) grid cell.
+    Compute along-tract scalar profile given precomputed indices using
+    BUAN weighted mean.
 
     Parameters
     ----------
+    org_bundle : ArraySequence
+        Bundle in the same space as scalar_map
+    s_index : (N,) int
+        Point-wise along-tract segment indices
+    s_dist : (N,) float
+        Poinst-wise distance to the closest centroid point
+    scalar_map : np.ndarray
+        Array of scalar map values to project to org_bundle.
+        They must be in the same space
+    scalar_map : np.ndarray
+        Affine matrix of scalar map
+    epsilon : float
+        Prevent division by zero during weight calculation
+
+    Returns
+    -------
+    metric_profile : (ns, ) float
+        Along-tract profile of scalar map value
+    """  
+    # Compute weights (based on distance) and segments indices
+    weights = 1 / (s_dist + epsilon)
+    ns = s_index.max() + 1
+    
+    # Project scalar map to bundle
+    metrics = values_from_volume(scalar_map, org_bundle, scalar_affine)
+    metrics_flatten = np.array([m for metric_sl in metrics for m in metric_sl])
+  
+    # Compute weighted mean
+    metric_profile = []
+    for i in range(ns):
+        segment_mask = (s_index==i) & (~np.isnan(metrics_flatten))
+        if len(segment_mask)>1:
+            vals = metrics_flatten[segment_mask]
+            wts = weights[segment_mask]
+            wts /= np.sum(wts)
+            weighted_mean = np.sum(wts * vals)
+            metric_profile.append(weighted_mean)
+        else:
+            metric_profile.append(0)
+    return np.array(metric_profile)
+# 
+def grid_profile(org_bundle, s_index, r_index, valid_mask,
+                scalar_map, scalar_affine):
+    """
+    Compute scalar profile per (s,r) grid cell given precomputed indices.
+
+    Parameters
+    ----------
+    org_bundle : ArraySequence
+        Bundle in the same space as scalar_map
     s_index : (N,) int
         Along-tract segment indices
     r_index : (N,) int
         Radial bin indices
-    fa_values : (N,) float
-        FA value at each point
     valid_mask : (N,) bool
         Mask indicating which points to include
+    scalar_map : np.ndarray
+        Array of scalar map values to project to org_bundle.
+        They must be in the same space
+    scalar_map : np.ndarray
+        Affine matrix of scalar map
 
     Returns
     -------
-    fa_grid : (ns, nr) float
-        Mean FA in each (s,r) bin
-    counts : (ns, nr) int
-        Number of points in each bin
+    metric_grid : (ns, ) float
+        Along-tract profile of scalar map value
     """    
     # Project scalar map to bundle
     metrics = values_from_volume(scalar_map, org_bundle, scalar_affine)
@@ -271,15 +329,14 @@ def grid_profile(org_bundle, s_index, r_index, valid_mask,
 
     # Sum FA in each bin
     metric_sum = np.bincount(bin_ids, weights=metrics_masked, minlength=ns*nr)
-    counts = np.bincount(bin_ids, minlength=ns*nr)
+    counts = np.bincount(bin_ids, minlength=ns * nr)
 
     # Avoid divide-by-zero
     with np.errstate(divide='ignore', invalid='ignore'):
-        fa_mean = metric_sum / counts
-        fa_mean[counts == 0] = 0
+        metric_mean = metric_sum / counts
+        metric_mean[counts == 0] = 0
 
     # Reshape back to 2D grid
-    fa_grid = fa_mean.reshape((ns, nr))
-    counts = counts.reshape((ns, nr))
+    metric_grid = metric_mean.reshape((ns, nr))
 
-    return fa_grid, counts
+    return metric_grid
