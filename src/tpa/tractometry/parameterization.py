@@ -41,7 +41,7 @@ def create_radial_bins(r_signed, r_len=5):
     r_signed : np.ndarray, shape (M,)
         Signed radial distances for each point
     r_len : float
-        Target radial bin size
+        Target radial bin size (mm)
 
     Returns
     -------
@@ -49,6 +49,8 @@ def create_radial_bins(r_signed, r_len=5):
         Bin index for each point
     nr : int
         Total number of bins after merging
+    r_edges: np.nd.array, shape (nr+1, )
+        Edges of the radial bins
     """
     r_min, r_max = r_signed.min(), r_signed.max()
     nr = int(np.ceil((r_max - r_min) / r_len))
@@ -89,17 +91,26 @@ def get_grid_from_atlas(atlas_bundle, s_len=5, r_len=5):
     Define shared (s, r) grid based on atlas bundle geometry
     along tract and radially across tract.
 
+    Parameters
+    ----------
+    atlas_bundle : ArraySequence
+        Atlas bundle
+    s_len : float
+        Target along-tract segment size (mm)
+    r_len : float
+        Target radial bin size (mm)
+
     Returns
     -------
-    s_index : (n_points, )
+    s_index :  np.ndarray, shape (n_points, )
         Point-wise assignment of along-tract segments
-    r_index : int
+    r_index :  np.ndarray, shape (n_points, )
         Point-wise assignment of radial bins
-    centroid : (ns, 3)
+    centroid :  np.ndarray, shape (ns, 3)
         Atlas centroid coordinates
-    uvecs : (ns, 3)
+    uvecs :  np.ndarray, shape (ns, 3)
         Radial vectors for each along-tract segment
-    r_edges: (nr+1, )
+    r_edges:  np.ndarray, shape (nr+1, )
         Edges of radial bins
     """
 
@@ -146,31 +157,33 @@ def get_grid_from_atlas(atlas_bundle, s_len=5, r_len=5):
 def parametrize_bundle(bundle, centroid, u_vecs, r_edges):
     """
     Parametrize a subject bundle onto atlas (s, r) grid,
-    and mark bins with too few points as invalid.
+    and mask bins with too few points as invalid.
 
     Parameters
     ----------
     bundle : ArraySequence
         Subject bundle
-    centroid : (ns, 3)
-        Atlas centroid points
-    u_vecs : (ns, 3)
-        Tangent vectors along centroid
-    r_edges : (nr+1,)
-        Radial bin edges
+    centroid :  np.ndarray, shape (ns, 3)
+        Atlas centroid coordinates
+    uvecs :  np.ndarray, shape (ns, 3)
+        Radial vectors for each along-tract segment
+    r_edges:  np.ndarray, shape (nr+1, )
+        Edges of radial bins
 
     Returns
     -------
-    s_index : (n_points,)
+    s_index : np.ndarray, shape (n_points,)
         Along-tract segment indices
-    r_index : (n_points,)
+    r_index : np.ndarray, shape (n_points,)
         Radial bin indices
-    s_dist : (n_points, )
+    s_dist : np.ndarray, shape (n_points, )
         Distance to the closest point on the centroid
-    valid_mask : (n_points,)
+    valid_mask : np.ndarray, shape (n_points,)
         Boolean mask marking valid points. Points are discarded 
         if they are outside of the atlas radial rage or if the
         bins they are in contain too few points.
+    counts : np.ndarray, shape (ns, nr)
+        Number of streamline points per bin
     """
     points = bundle.get_data()
 
@@ -185,14 +198,14 @@ def parametrize_bundle(bundle, centroid, u_vecs, r_edges):
     nr = len(r_edges) - 1
 
     # Clip points outside of the atlas radial range
-    valid_mask = (r_index >= 0) & (r_index < len(r_edges) - 1)
+    valid_mask = (r_index >= 0) & (r_index < nr)
     r_index = np.clip(r_index, 0, nr - 1)
 
     # Mask sparse bins based on point counts
     bin_ids = s_index * nr + r_index
     counts = np.bincount(bin_ids, minlength=ns * nr)
     thresh = np.clip(np.median(counts) * 0.5, 50, 200)
-    print(thresh)
+    logging.info(f"Threshold for points per bin set to {thresh}")
     sparse_bins = np.where(counts < thresh)[0]
     if len(sparse_bins) > 0:
         mask_sparse = np.isin(bin_ids, sparse_bins)
@@ -211,14 +224,19 @@ def prepare_bundle_pairs(org_bundle, rec_bundle, use_even_points=True):
 
     Parameters
     ----------
-    org_bundle : (ArraySequence) Streamlines in the native space
-    rec_bundle : (ArraySequence) Streamlines in the MNI space
-    use_even_points : (bool) Resample to evenly distributed points for each streamline
+    org_bundle : ArraySequence 
+        Streamlines in the native space
+    rec_bundle : ArraySequence 
+        Streamlines in the MNI space
+    use_even_points : bool
+        Resample to evenly distributed points for each streamline
 
     Returns
     -------
-    org_bundle_rsp : (ArraySequence) Streamlines in the native space, resampled
-    rec_bundle_rsp : (ArraySequence) Streamlines in the MNI space, resample to match org_bundle
+    org_bundle_rsp : ArraySequence
+        Streamlines in the native space, resampled
+    rec_bundle_rsp : ArraySequence
+        Streamlines in the MNI space, resample to match org_bundle
     """
     if len(org_bundle) != len(rec_bundle):
         raise ValueError("Both bundles must have the same number of streamlines")
@@ -236,7 +254,7 @@ def prepare_bundle_pairs(org_bundle, rec_bundle, use_even_points=True):
     return ArraySequence(org_bundle_rsp), ArraySequence(rec_bundle_rsp)
 
 
-def buan_profile(org_bundle, s_index, s_dist,
+def buan_profile(org_bundle, s_index, s_dist, ns,
                  scalar_map, scalar_affine, 
                  epsilon=1e-8):
     """
@@ -247,14 +265,17 @@ def buan_profile(org_bundle, s_index, s_dist,
     ----------
     org_bundle : ArraySequence
         Bundle in the same space as scalar_map
-    s_index : (N,) int
+    s_index : np.ndarray, shape (n_points,)
         Point-wise along-tract segment indices
-    s_dist : (N,) float
-        Poinst-wise distance to the closest centroid point
+    s_dist : np.ndarray, shape (n_points,)
+        Poinst-wise distance to the closest centroid point.
+        The inverse distances are used as weights
+    ns: int
+        The number of segments
     scalar_map : np.ndarray
         Array of scalar map values to project to org_bundle.
         They must be in the same space
-    scalar_map : np.ndarray
+    scalar_affine : np.ndarray
         Affine matrix of scalar map
     epsilon : float
         Prevent division by zero during weight calculation
@@ -266,7 +287,6 @@ def buan_profile(org_bundle, s_index, s_dist,
     """  
     # Compute weights (based on distance) and segments indices
     weights = 1 / (s_dist + epsilon)
-    ns = s_index.max() + 1
     
     # Project scalar map to bundle
     metrics = values_from_volume(scalar_map, org_bundle, scalar_affine)
@@ -285,9 +305,9 @@ def buan_profile(org_bundle, s_index, s_dist,
         else:
             metric_profile.append(0)
     return np.array(metric_profile)
-# 
+
 def grid_profile(org_bundle, s_index, r_index, valid_mask,
-                scalar_map, scalar_affine):
+                 ns, nr, scalar_map, scalar_affine):
     """
     Compute scalar profile per (s,r) grid cell given precomputed indices.
 
@@ -295,12 +315,16 @@ def grid_profile(org_bundle, s_index, r_index, valid_mask,
     ----------
     org_bundle : ArraySequence
         Bundle in the same space as scalar_map
-    s_index : (N,) int
+    s_index : np.ndarray, shape (n_points,)
         Along-tract segment indices
-    r_index : (N,) int
+    r_index : np.ndarray, shape (n_points,)
         Radial bin indices
-    valid_mask : (N,) bool
+    valid_mask : np.ndarray, shape (n_points,)
         Mask indicating which points to include
+    ns: int
+        The number of along-tract segments
+    nr: int
+        The number of radial bins
     scalar_map : np.ndarray
         Array of scalar map values to project to org_bundle.
         They must be in the same space
@@ -320,9 +344,6 @@ def grid_profile(org_bundle, s_index, r_index, valid_mask,
     s_index_masked = s_index[valid_mask]
     r_index_masked = r_index[valid_mask]
     metrics_masked = metrics_flatten[valid_mask]
-
-    ns = s_index_masked.max() + 1
-    nr = r_index_masked.max() + 1
 
     # Flatten 2D indices to 1D
     bin_ids = s_index_masked * nr + r_index_masked

@@ -5,11 +5,14 @@ from pathlib import Path
 from typing import Any, List, Union
 
 import numpy as np
+import pandas as pd
 
 import nibabel as nib
 from dipy.io.image import load_nifti, save_nifti
 from dipy.io.streamline import load_trk, save_trk
 from dipy.io.stateful_tractogram import Space, StatefulTractogram
+
+from tpa.utils.utils import file_exists
 
 ListItem = Union[str, int, float]
 
@@ -60,7 +63,7 @@ def load_list(filepath, is_str=False):
         raise ValueError(f"Unsupported file type: {filepath.suffix}")
 
 
-def save_list_to_txt(file_path: str, data: List[ListItem]) -> None:
+def save_list_to_txt(file_path: str, data: List[ListItem], force: bool = False) -> None:
     """
     Save a list of strings, ints, or floats to a text file, one element per line.
     
@@ -68,11 +71,17 @@ def save_list_to_txt(file_path: str, data: List[ListItem]) -> None:
         file_path: Path to the text file to write.
         data: List of elements (str, int, float) to write.
     """
+    if file_exists(file_path) and not force:
+        logging.info(f"<{file_path}> already exists")
+        return
+
+    if len(data)==0:
+        logging.info("Empty data")
+        return
     if not isinstance(data, (list, tuple, np.ndarray)):
         data = [data]
-
     if isinstance(data, np.ndarray):
-        np.savetxt(file_path, data.flatten())
+        np.savetxt(file_path, data)
     else:
         with open(file_path, 'w') as f:
             for item in data:
@@ -93,7 +102,7 @@ def load_json(file_path: str) -> Any:
         return json.load(f)
 
 
-def save_json(file_path: str, data: Any, indent: int = 4) -> None:
+def save_json(file_path: str, data: Any, indent: int = 4, force: bool = False) -> None:
     """
     Write Python data (dict, list, etc.) to a JSON file.
     
@@ -102,8 +111,18 @@ def save_json(file_path: str, data: Any, indent: int = 4) -> None:
         data: Python data (dict, list, etc.) to write.
         indent: Number of spaces for indentation (default 4).
     """
-    with open(file_path, 'w') as f:
-        json.dump(data, f, indent=indent)
+    if file_exists(file_path) and not force:
+        logging.info(f"<{file_path}> already exists")
+    else:
+        with open(file_path, 'w') as f:
+            json.dump(data, f, indent=indent)
+
+
+def save_csv(file_path: str, df: pd.DataFrame, indent: int = 4, force: bool = False):
+    if file_exists(file_path) and not force:
+        logging.info(f"<{file_path}> already exists")
+    else:
+        df.to_csv(file_path, index=False)
 
 
 def load_streamlines(trk_file):
