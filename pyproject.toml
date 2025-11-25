@@ -25,4 +25,5 @@ dev = [
 ]
 
 [project.scripts]
-run_profile = "tpa.cli.run_profile:main"
+tpa_profile = "tpa.cli.tpa_profile:main"
+tpa_lmm = "tpa.cli.tpa_lmm:main"

@@ -118,7 +118,7 @@ def save_json(file_path: str, data: Any, indent: int = 4, force: bool = False) -
             json.dump(data, f, indent=indent)
 
 
-def save_csv(file_path: str, df: pd.DataFrame, indent: int = 4, force: bool = False):
+def save_csv(file_path: str, df: pd.DataFrame, force: bool = False):
     if file_exists(file_path) and not force:
         logging.info(f"<{file_path}> already exists")
     else:

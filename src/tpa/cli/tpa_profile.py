@@ -87,7 +87,7 @@ def main():
                         help="Minimum number of lines the bundle must have to output a profile")
     parser.add_argument( "--force", "-f", action="store_true", 
                         help="Force saving files", )
-    parser.add_argument( "--save_atlas", "-save_atlas", action="store_true", 
-                        help="Save atlas configs", )
+    # parser.add_argument( "--save_atlas", "-save_atlas", action="store_true", 
+    #                     help="Save atlas configs", )
     args = parser.parse_args()
     run(args)

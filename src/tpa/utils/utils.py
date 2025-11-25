@@ -1,8 +1,10 @@
 import sys
 import logging
-import numpy as np
 from pathlib import Path
 from importlib.resources import files
+
+import numpy as np
+from scipy.ndimage import label
 
 def setup_logging():
     """Setup logging using default config"""
@@ -71,3 +73,13 @@ def random_select(data, n_sample=1, rng=0):
     '''
     rng = get_rng(rng)
     return rng.choice(len(data), size=n_sample, replace=False)
+
+def clean_mask(mask, min_component_size=8):
+    '''Remove small components from mask'''
+    labeled, n_components = label(mask)
+    clean = np.zeros_like(mask, dtype=bool)
+    for comp_id in range(1, n_components + 1):
+        comp = (labeled == comp_id)
+        if comp.sum() >= min_component_size:
+            clean[comp] = True
+    return clean
