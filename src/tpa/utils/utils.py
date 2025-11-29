@@ -18,7 +18,12 @@ def setup_logging():
 
 def get_t1_mni_path():
     """Get filename of the T1 MNI template"""
-    return str(files("buan_weighted_mean") / "assets" / "mni_icbm152_t1_tal_nlin_asym_09a_masked.nii.gz")
+    return str(files("tpa") / "assets" / "mni_icbm152_t1_tal_nlin_asym_09a_masked.nii.gz")
+
+def get_wm_mni_path():
+"""Get filename of the T1 MNI template"""
+    return str(files("tpa") / "assets" / "mni_icbm152_wm_tal_nlin_asym_09a.nii")
+
 
 def file_exists(file_path: str) -> bool:
     """
