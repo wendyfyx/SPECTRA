@@ -12,3 +12,6 @@ notebooks/
 # Virtual environments
 .venv
 uv.lock
+
+# Mac files
+.DS_Store
