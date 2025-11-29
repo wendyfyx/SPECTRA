@@ -21,9 +21,8 @@ def get_t1_mni_path():
     return str(files("tpa") / "assets" / "mni_icbm152_t1_tal_nlin_asym_09a_masked.nii.gz")
 
 def get_wm_mni_path():
-"""Get filename of the T1 MNI template"""
-    return str(files("tpa") / "assets" / "mni_icbm152_wm_tal_nlin_asym_09a.nii")
-
+    """Get filename of the T1 MNI template"""
+    return str(files("tpa") / "assets" / "mni_icbm152_wm_tal_nlin_asym_09a.nii.gz")
 
 def file_exists(file_path: str) -> bool:
     """

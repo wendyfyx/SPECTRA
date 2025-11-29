@@ -121,16 +121,16 @@ def alternating_colors(s_index=None,
     return [tuple(c) for c in colors]
 
 
-def grid_colors(grid_values, s_index, r_index=None, valid_mask=None, 
+def color_from_values(values, s_index, r_index=None, valid_mask=None, 
                 cmap='magma', vmin=None, vmax=None, vcenter=None, **kwargs):
     """
     Map 2D grid values (ns, nr) to RGB colors for individual points.
 
     Parameters
     ----------
-    grid_values : array-like, shape (ns,) or (ns, nr)
-        Scalar values defined on a 1D or 2D grid.
-    s_index : array-like, shape (N,)
+    grid_values : array, shape (N,), (ns,) or (ns,nr)
+        Scalar values defined on a 1D, 2D grid or per point.
+    s_index : array-like, shape (N,), optional
         s-axis grid coordinates for each point.
     r_index : array-like, shape (N,), optional
         r-axis grid coordinates for each point.
@@ -145,40 +145,54 @@ def grid_colors(grid_values, s_index, r_index=None, valid_mask=None,
         List of (r, g, b) tuples for each point.
     """
 
-    s_index = np.asarray(s_index)
-    r_index = np.asarray(r_index)
-    grid_values = np.asarray(grid_values)
-    print(grid_values.shape)
+    values = np.asarray(values)
 
-    N = len(s_index)
+    # Determine number of points N depending on mode
+    if s_index is None and r_index is None:
+        # per-point mode
+        N = values.shape[0]
+        s_index = r_index = None
+    else:
+        # index-based mode
+        s_index = np.asarray(s_index) if s_index is not None else None
+        r_index = np.asarray(r_index) if r_index is not None else None
+        N = len(s_index) if s_index is not None else len(r_index)
+
+    # default all-valid mask
     if valid_mask is None:
         valid_mask = np.ones(N, dtype=bool)
     else:
-        valid_mask = np.asarray(valid_mask).astype(bool)
+        valid_mask = np.asarray(valid_mask, dtype=bool)
 
-    # Check grid dimension
-    if grid_values.ndim == 1:
-        ns = grid_values.shape[0]
+    # ------- Mode 1: Per-point values (N,) -------
+    if values.ndim == 1 and (s_index is None and r_index is None):
+        point_values = values
+
+    # ------- Mode 2: 1D grid (ns,) -------
+    elif values.ndim == 1:
+        ns = values.shape[0]
+        if s_index is None:
+            raise ValueError("1D grid requires s_index.")
         if np.max(s_index) + 1 != ns:
-            raise ValueError(
-                f"1D: s_index expects ns={ns}, but got max index {np.max(s_index)}"
-            )
-        values = grid_values[s_index]
-    elif grid_values.ndim == 2:
-        ns, nr = grid_values.shape
+            raise ValueError(f"s_index expects ns={ns}, got max {np.max(s_index)}")
+        point_values = values[s_index]
+
+    # ------- Mode 3: 2D grid (ns,nr) -------
+    elif values.ndim == 2:
+        if s_index is None or r_index is None:
+            raise ValueError("2D grid requires both s_index and r_index.")
+        ns, nr = values.shape
         if np.max(s_index) + 1 != ns:
-            raise ValueError(
-                f"2D: s_index expects ns={ns}, but got max index {np.max(s_index)}"
-            )
+            raise ValueError(f"s_index expects ns={ns}, got max {np.max(s_index)}")
         if np.max(r_index) + 1 != nr:
-            raise ValueError(
-                f"2D: r_index expects nr={nr}, but got max index {np.max(r_index)}"
-            )
-        values = grid_values[s_index, r_index]
-    else:
-        raise ValueError("grid_values must be 1D or 2D")
+            raise ValueError(f"r_index expects nr={nr}, got max {np.max(r_index)}")
+        point_values = values[s_index, r_index]
 
-    values_valid = values[np.isfinite(values)]
+    else:
+        raise ValueError("grid_values must be (N,), (ns,) or (ns,nr).")
+
+    # Map values to colors
+    values_valid = point_values[np.isfinite(point_values)]
     if len(values_valid) == 0: # if all NaN, return grey
         return [(0.5, 0.5, 0.5)] * N
     if vmin is None:
@@ -187,9 +201,8 @@ def grid_colors(grid_values, s_index, r_index=None, valid_mask=None,
         vmax = np.percentile(values_valid, 95)
     logging.debug(f"Plotting values with using range [{vmin:.4f},{vmax:.4f}].")
 
-    # Map values to colors
     cmap = make_colormap(cmap, vmin, vmax, vcenter=vcenter, **kwargs)
-    colors = cmap.to_rgba(values)[:, :3]
+    colors = cmap.to_rgba(point_values)[:, :3]
 
     # Assign gray to invalid points
     colors[~valid_mask] = np.array([0.5, 0.5, 0.5])

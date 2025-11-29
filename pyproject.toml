@@ -27,3 +27,4 @@ dev = [
 [project.scripts]
 tpa_profile = "tpa.cli.tpa_profile:main"
 tpa_lmm = "tpa.cli.tpa_lmm:main"
+tpa_viz = "tpa.cli.tpa_viz:main"
