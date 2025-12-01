@@ -1,6 +1,6 @@
 """
 DESCRIPTION:
-    Bundle Visualization
+    Bundle Visualization with 1D/2D profile color support
 USAGE:
     TODO
 """
@@ -118,7 +118,7 @@ def run(args):
 
             ends = args.bundle_color[0].endswith
             s_index, r_index = None, None
-            
+
             if ends('.npy') or ends('.txt'): # Along-tract segment color
                 values = load_list(args.bundle_color[i])
                 s_index, r_index =  _get_sr_index_self(bundle, s_len=args.s_len, r_len=args.r_len)
@@ -269,9 +269,9 @@ def main():
     parser.add_argument( "--bundle_color", "-c", nargs="*", type=str, default=None, 
                         help="Bundle color(s), can be mpl colors (string), along-tract colors (.npy, .txt), \
                              or volume color (.nii.gz, only one file is supported")
-    parser.add_argument('--s_len', '-s', type=int, required=False, default=5, 
+    parser.add_argument('--s_len', '-s', type=int, required=False, default=3, 
                         help="Length of along-tract segments, must match with bundle color file")
-    parser.add_argument('--r_len', '-r', type=int, required=False, default=5, 
+    parser.add_argument('--r_len', '-r', type=int, required=False, default=3, 
                         help="Length of radial bins, must match with bundle color file")
     parser.add_argument( "--cmap", "-cmap", type=str, default="YlOrBr_r", 
                         help="Colormap name from matplotlib or cmasher i.e. Blues", )

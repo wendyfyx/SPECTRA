@@ -145,7 +145,7 @@ def color_from_values(values, s_index, r_index=None, valid_mask=None,
         List of (r, g, b) tuples for each point.
     """
 
-    values = np.asarray(values)
+    values = np.asarray(values).squeeze()
 
     # Determine number of points N depending on mode
     if s_index is None and r_index is None:
