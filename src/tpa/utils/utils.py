@@ -78,6 +78,10 @@ def random_select(data, n_sample=1, rng=0):
     rng = get_rng(rng)
     return rng.choice(len(data), size=n_sample, replace=False)
 
+def sample_from_range_uniform(low, high, n_sample=1, rng=0):
+    rng = get_rng(rng)
+    return rng.uniform(low=low, high=high, size=n_sample)
+
 def clean_mask(mask, min_component_size=8):
     '''Remove small components from mask'''
     labeled, n_components = label(mask)

@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 
 def make_colormap(cmap_name, vmin, vmax, vcenter=None, 
-                  plot_cmap_label=None, plot_horizontal=True):
+                  plot_cmap_label=None, plot_horizontal=True,
+                  show_cmap=False, save_cmap_path="./cmap.png"):
     '''Make colormap given name and value range'''
     if vcenter is not None and vmin < vcenter:
         norm = mpl.colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=vcenter)
@@ -22,7 +23,10 @@ def make_colormap(cmap_name, vmin, vmax, vcenter=None,
         cb = fig.colorbar(cmap, cax=ax, orientation=orientation)
         cb.set_label(label=plot_cmap_label, size=20)
         ax.tick_params(axis='x' if plot_horizontal else 'x', labelsize=18)
-        fig.show()
+        if show_cmap:
+            fig.show()
+        if save_cmap_path:
+            fig.savefig(save_cmap_path, bbox_inches='tight')
     return cmap
 
 

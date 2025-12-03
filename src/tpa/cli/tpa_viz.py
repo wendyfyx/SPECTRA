@@ -24,7 +24,7 @@ from dipy.tracking.streamline import transform_streamlines
 from fury import actor, window
 from fury.utils import map_coordinates_3d_4d
 
-from tpa.tractometry.parameterization import get_grid_from_atlas
+from tpa.tractometry.parameterization import get_grid_from_atlas, get_centroid
 from tpa.viz.viz_fury import get_cam_settings_fury
 from tpa.viz.colors import color_from_values
 from tpa.utils.io import load_list
@@ -121,7 +121,8 @@ def run(args):
 
             if ends('.npy') or ends('.txt'): # Along-tract segment color
                 values = load_list(args.bundle_color[i])
-                s_index, r_index =  _get_sr_index_self(bundle, s_len=args.s_len, r_len=args.r_len)
+                if not args.centroid_only:
+                    s_index, r_index =  _get_sr_index_self(bundle, s_len=args.s_len, r_len=args.r_len)
 
             elif ends('nii.gz'): # Volume color
                 img_data, affine = load_nifti(args.bundle_color[0]) # only support one volume
@@ -133,32 +134,29 @@ def run(args):
                 colors = np.array(mpl.colors.to_rgba(args.bundle_color[i]))
 
             if values is not None: # Convert along-tract or volume values to color
-                # colors = colors_from_values(
-                #     values,
-                #     indx=indx,
-                #     cmap=args.cmap,
-                #     vmin=args.vmin,
-                #     vmax=args.vmax,
-                #     label=args.cmap_title,
-                #     save_cmap=args.out_cbar_fname,
-                # )
                 colors = color_from_values(values, s_index=s_index, r_index=r_index,
-                                     cmap=args.cmap, vmin=args.vmin, vmax=args.vmax)
+                                     cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
+                                     plot_cmap_label=args.cmap_title, plot_horizontal=True,
+                                     show_cmap=False, save_cmap_path=args.out_cbar_fname)
+
+        # Plot bundle
+        if args.centroid_only:
+            bundle_plot = ArraySequence([get_centroid(bundle, n_points=len(colors), thresh=100)])
+        else:
+            bundle_plot = bundle
 
         if args.as_points: # Plot bundle as points 
-            stream_actor = actor.point(
-                bundle.get_data(), colors=window.colors.green, point_radius=0.2
-            )
+            scene.add(actor.point(
+                bundle_plot.get_data(), colors=window.colors.green, point_radius=0.2
+            ))
         else: # Plot bundle as streamlines 
-            stream_actor = actor.line(
-                bundle, 
+            scene.add(actor.line(
+                bundle_plot, 
                 fake_tube=args.fake_tube, 
-                linewidth=args.linewidth, 
+                linewidth=args.linewidth if not args.centroid_only else 30, 
                 colors=colors, 
-                opacity=args.opacity
-            )
-
-        scene.add(stream_actor)
+                opacity=args.opacity if not args.centroid_only else 1
+            ))
 
     # Plot glass brain
     if args.glass_brain_fnames is not None:
@@ -299,6 +297,8 @@ def main():
                         help="Opacity for mask(s)", )
 
     # Plot option args
+    parser.add_argument( "--centroid_only", "-centroid", action="store_true", 
+                        help="Only plot bundle centroid", )
     parser.add_argument( "--auto_crop", "-crop", action="store_true", 
                         help="Automatically crop image when saving", )
     parser.add_argument( "--show_bundle", "-show", action="store_true", 

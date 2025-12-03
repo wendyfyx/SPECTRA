@@ -56,7 +56,6 @@ def aggregate_profiles(metric: str,
     if not bundle_dir.exists():
         raise FileNotFoundError(f"Directory {bundle_dir} does not exist")
     
-    print(mode)
     data = []
     subjects = []
 
@@ -100,35 +99,44 @@ def aggregate_profiles(metric: str,
 
     return group_avg, mask, df
 
-def run_lmm(df, 
-            target_col='dx', 
-            target_ref_group='control', 
-            subj_col='subject',
-            site_col="site",
-            covar_cols=['age','sex'],
-            cont_cols=['age'],
-            disable_tqdm=True, 
-            min_subjs=10):
+def run_lmm_sm(df, 
+                target_col='dx', 
+                target_ref_group='control', 
+                subj_col='subject',
+                site_col="site",
+                covar_cols=['age','sex'],
+                cont_cols=['age'],
+                disable_tqdm=True, 
+                min_subjs=10):
     '''
-    Run linear mixed model on BUAN profiles. Input dataframe must contain 
-    profile_ columns (from aggregate_profile) and other covariates
-    Specify `cont_cols` to apply standard scaling
+    Run linear mixed model on BUAN profiles using statsmodel. 
+    Input dataframe must contain  profile_ columns (from aggregate_profile) 
+    and other covariates. Specify `cont_cols` to apply standard scaling
     
     Parameters
     ----------
-    df (pd.DataFrame): Input dataframe must have one row per subject, with tract profiles 
-                        created from `aggregate_profiles` merged with metadata, and with 
-                        informatin on covariates and site.
-    target_col (str): Target column, could be categorical or continuous
-    target_ref_group (str): If `target_col` is categorical, a reference group could be specified
-    site_col (str): Column specifying site to be modeled as random effect if available
-    covar_cols (List[str]): List of covariate columns to be modeled as fixed effects
-    cont_cols (List[str]): List of continuous columns from either `target_col` or `covar_cols` to be 
-                            standardized before running model. The metric column is always standardized.
+    df : pd.DataFrame
+        Input dataframe with one row per subject, tract profiles from 
+        `aggregate_profiles` merged with metadata.
+    target_col : str
+        Target column, could be categorical or continuous
+    target_ref_group : str
+        If `target_col` is categorical, reference group for contrast
+    subj_col : str
+        Column specifying subject ID
+    site_col : str
+        Column specifying site (modeled as random intercept)
+    covar_cols : List[str]
+        Covariate columns modeled as fixed effects
+    cont_cols : List[str]
+        Continuous columns to standardize before fitting
 
     Returns
     -------
-    pd.DataFrame: A dataframe with statistics for each segment and variable modeled
+    df_lmm : pd.DataFrame
+        Statistics for each segment and variable (includes df column)
+    df_residual : pd.DataFrame
+        Residuals for each segment and subject
 
     '''
     df = df.dropna(subset=[target_col] + covar_cols)
@@ -199,6 +207,123 @@ def run_lmm(df,
         df = df.assign(s=s_r[0], r=s_r[1]).drop(columns=['Bin'])
         return df
     
+    return rename_bin(df_lmm), rename_bin(df_residual)
+
+
+def run_lmm_pymer4(df, 
+                   target_col='dx', 
+                   target_ref_group='control', 
+                   subj_col='subject',
+                   site_col="site",
+                   covar_cols=['age', 'sex'],
+                   cont_cols=['age'],
+                   disable_tqdm=True, 
+                   min_subjs=10):
+    '''
+    Run linear mixed model on BUAN profiles using pymer4.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe with one row per subject, tract profiles from 
+        `aggregate_profiles` merged with metadata.
+    target_col : str
+        Target column, could be categorical or continuous
+    target_ref_group : str
+        If `target_col` is categorical, reference group for contrast
+    subj_col : str
+        Column specifying subject ID
+    site_col : str
+        Column specifying site (modeled as random intercept)
+    covar_cols : List[str]
+        Covariate columns modeled as fixed effects
+    cont_cols : List[str]
+        Continuous columns to standardize before fitting
+
+    Returns
+    -------
+    df_lmm : pd.DataFrame
+        Statistics for each segment and variable (includes df column)
+    df_residual : pd.DataFrame
+        Residuals for each segment and subject
+    '''
+    from pymer4.models import Lmer
+
+    df = df.dropna(subset=[target_col] + covar_cols)
+    nsubjs = len(df)
+
+    # Convert to long format
+    df = df.melt(
+        id_vars=[col for col in df.columns if "bin_" not in col],
+        var_name="bin",
+        value_name="metric"
+    )
+
+    # Set reference level for categorical target
+    if target_ref_group is not None and df[target_col].dtype == 'object':
+        df[target_col] = pd.Categorical(
+            df[target_col], 
+            categories=[target_ref_group] + [c for c in df[target_col].unique() if c != target_ref_group]
+        )
+
+    # Build formula
+    fixed_effects = [target_col] + covar_cols
+    formula = f"metric ~ {' + '.join(fixed_effects)}"
+    if site_col:
+        formula += f" + (1|{site_col})"
+    logging.info(f"Running LMM on {nsubjs} subjects with formula <{formula}>")
+
+    df_lmm = []
+    residuals = []
+
+    for bin_name in tqdm(df['bin'].unique(), desc="Bin", disable=disable_tqdm):
+        df_seg = df.loc[df['bin'] == bin_name].copy()
+        subjs = df_seg[subj_col].values
+        n_subj = np.count_nonzero(df_seg['metric'])
+        if n_subj < min_subjs:
+            continue
+
+        # Standardize continuous columns
+        df_seg['metric'] = StandardScaler().fit_transform(df_seg[['metric']])
+        for c in cont_cols:
+            df_seg[c] = StandardScaler().fit_transform(df_seg[[c]])
+
+        # Fit model with pymer4
+        try:
+            model = Lmer(formula, data=df_seg)
+            model.fit(summarize=False)  # result is the coefficient table
+            result = model.coefs 
+        except Exception as e:
+            logging.error(f"Error for segment {bin_name}: {e}")
+            continue
+
+        # Extract results from coefficient table
+        # pymer4 returns DataFrame with columns: Estimate, SE, DF, T-stat, P-val, Sig
+        for var_name in result.index:
+            beta = result.loc[var_name, 'Estimate']
+            se = result.loc[var_name, 'SE']
+            df_satt = result.loc[var_name, 'DF']
+            t = result.loc[var_name, 'T-stat']
+            pval = result.loc[var_name, 'P-val']
+            
+            # Compute partial Cohen's d using residual SD
+            sigma_residual = np.sqrt(model.residuals.var())
+            d_partial = beta / sigma_residual
+            
+            df_lmm.append([bin_name, var_name, pval, beta, t, se, df_satt, 
+                          sigma_residual, d_partial, n_subj])
+        
+        residuals.append([bin_name] + model.residuals.tolist())
+
+    df_lmm = pd.DataFrame(df_lmm, columns=['Bin', 'Variable', 'p', 'beta', 't', 'se', 'df',
+                                           'sigma_residual', 'd_partial', 'n_subjs'])
+    df_residual = pd.DataFrame(residuals, columns=['Bin'] + subjs.tolist())
+
+    def rename_bin(df):
+        s_r = df['Bin'].str.extract(r'bin_s(\d+)_r(\d+)').astype(int)
+        df = df.assign(s=s_r[0], r=s_r[1]).drop(columns=['Bin'])
+        return df
+
     return rename_bin(df_lmm), rename_bin(df_residual)
 
 def load_stat_as_grid(df, var_name, stat_name, ns, nr):

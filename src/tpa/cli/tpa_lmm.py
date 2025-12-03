@@ -1,3 +1,4 @@
+#!/ifs/loni/faculty/thompson/four_d/wfeng/miniconda3/envs/pymer4_v2/bin/python
 """
 DESCRIPTION:
     Run linear mixed model from profile
@@ -6,6 +7,7 @@ USAGE:
     
 """
 
+import os
 import argparse
 import logging
 from pathlib import Path
@@ -13,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from tpa.tractometry.lmm import aggregate_profiles, run_lmm
+from tpa.tractometry.lmm import aggregate_profiles, run_lmm_pymer4
 from tpa.utils.utils import setup_logging, file_exists
 from tpa.utils.io import load_list, save_csv
 
@@ -36,7 +38,7 @@ def run(args):
                       right_on='subject').drop(columns=[args.subject_col])
     
     # Run linear mixed model
-    df_lmm, df_resid = run_lmm(df, 
+    df_lmm, df_resid = run_lmm_pymer4(df, 
             target_col=args.target_col, 
             target_ref_group=args.target_ref_group,
             site_col=args.random_col,
