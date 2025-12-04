@@ -76,7 +76,7 @@ def resel_density(l_s, s_len, l_r=None, r_len=None):
         return s_len / fwhm_s
 
 
-def presmooth_residuals(residuals, mask, fwhm_mm, voxel_size):
+def presmooth_residuals(residuals, mask, fwhm_mm, s_len, r_len=None):
     """
     Pre-smooth residuals with Gaussian filter to stabilize RPV estimation.
     Smooths each subject's residuals independently within the mask.
@@ -98,12 +98,17 @@ def presmooth_residuals(residuals, mask, fwhm_mm, voxel_size):
         Smoothed residuals
     """
     n_s, n_r, n_subj = residuals.shape
-    s_len, r_len = voxel_size
+    mask = mask.astype(bool)
     
     # Convert FWHM to sigma: sigma = FWHM / sqrt(8*ln(2))
     sigma_s = (fwhm_mm / s_len) / np.sqrt(8 * np.log(2))
-    sigma_r = (fwhm_mm / r_len) / np.sqrt(8 * np.log(2))
-    logging.debug(f"Smoothing with FWHM={fwhm_mm}mm, sigma_s={sigma_s:.3f}, sigma_r={sigma_r:.3f}")
+    if n_r > 1 and r_len is not None:
+        sigma_r = (fwhm_mm / r_len) / np.sqrt(8 * np.log(2))
+        sigma = (sigma_s, sigma_r)
+        logging.debug(f"Smoothing with FWHM={fwhm_mm}mm, sigma_s={sigma_s:.3f}, sigma_r={sigma_r:.3f}")
+    else:
+        sigma = sigma_s
+        logging.debug(f"Smoothing with FWHM={fwhm_mm}mm, sigma_s={sigma_s:.3f}")
 
     smoothed = np.full_like(residuals, np.nan)
     for subj in range(n_subj):
@@ -112,14 +117,14 @@ def presmooth_residuals(residuals, mask, fwhm_mm, voxel_size):
         resid_slice[~mask] = 0
         
         # Smooth the residuals and mask
-        smoothed_slice = gaussian_filter(resid_slice, sigma=(sigma_s, sigma_r), 
-                                        mode='constant', cval=0)
-        smoothed_mask = gaussian_filter(mask.astype(float), sigma=(sigma_s, sigma_r), 
+        smoothed_slice = gaussian_filter(resid_slice, sigma=sigma, 
+                                        mode='constant', cval=0)                            
+        smoothed_mask = gaussian_filter(mask.astype(float), sigma=sigma, 
                                        mode='constant', cval=0)
         
         # Normalize to preserve intensity
-        valid = smoothed_mask > 0.01
-        smoothed_slice[valid] /= smoothed_mask[valid]
+        # valid = smoothed_mask > 1e-3
+        # smoothed_slice[valid] /= smoothed_mask[valid]
         smoothed_slice[~mask] = np.nan
         smoothed[:, :, subj] = smoothed_slice
     
@@ -155,13 +160,13 @@ def resel_density_from_resid(resid, s_len, r_len=None, nu=0.5, rho_thresh=0.1):
     lags_s, rho_s, n_pairs_s = empirical_correlation(resid, axis=0, max_lag=ns-1)
     report_s = fit_matern(lags_s, rho_s, n_pairs_s, s_len, rho_thresh=rho_thresh, nu=nu)
     l_s, lag_s, r2_s = report_s[f'{kernel}_l'], report_s['max_lag'], report_s[f'{kernel}_r2']
-    logging.info(f"Fit {kernel.upper()} (nu={nu}, max_lag={lag_s}) along s: l={l_s:.3f}, r2={r2_s:.3f}")
+    logging.debug(f"Fit {kernel.upper()} (nu={nu}, max_lag={lag_s}) along s: l={l_s:.3f}, r2={r2_s:.3f}")
     
     if nr>1 and r_len is not None:
         lags_r, rho_r, n_pairs_r = empirical_correlation(resid, axis=1, max_lag=nr-1)
         report_r = fit_matern(lags_r, rho_r, n_pairs_r, r_len, rho_thresh=rho_thresh, nu=nu)
         l_r, lag_r, r2_r = report_r[f'{kernel}_l'], report_r['max_lag'], report_r[f'{kernel}_r2']
-        logging.info(f"Fit {kernel.upper()} (nu={nu}, max_lag={lag_r}) along r: l={l_r:.3f}, r2={r2_r:.3f}")
+        logging.debug(f"Fit {kernel.upper()} (nu={nu}, max_lag={lag_r}) along r: l={l_r:.3f}, r2={r2_r:.3f}")
         return resel_density(l_s, s_len, l_r, r_len), report_s, report_r
     else:
         return resel_density(l_s, s_len), report_s
