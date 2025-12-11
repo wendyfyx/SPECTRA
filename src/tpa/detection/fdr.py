@@ -142,7 +142,6 @@ def fdr_multi(
 
     # weighted BH
     rejected, qvals, threshold, weights = weighted_fdr_bh(flat_p, weights=flat_w, alpha=alpha)
-    print(len(rejected), sum(rejected))
 
     # get bundle results
     results = {}
@@ -174,5 +173,7 @@ def fdr_multi(
         }
 
     global_prop_rejections = rejected.sum() / total_valid if total_valid > 0 else 0.0
+
+    logging.info(f"Rejected {rejected.sum()}/{total_valid} (prop={global_prop_rejections:.2f}) tests with threshold {threshold:.4f}")
 
     return threshold, results, global_prop_rejections, weights

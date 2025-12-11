@@ -4,9 +4,9 @@ from pathlib import Path
 from tqdm import tqdm
 from typing import List
 
+import re
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 from sklearn.preprocessing import StandardScaler
 from statsmodels.tools.sm_exceptions import ConvergenceWarning
 
@@ -87,10 +87,6 @@ def aggregate_profiles(metric: str,
         df[col] = data[:, s, r]
     df.insert(0, "subject", subjects)
 
-    # flat = data.reshape(N, ns * nr)
-    # df = pd.DataFrame(flat, columns=[f"profile_s{s}_r{r}" for s in range(ns) for r in range(nr)])
-    # df.insert(0, "subject", subjects)
-
     # Ensure numeric columns are float
     for col in df.columns[1:]:
         df[col] = df[col].astype(float)
@@ -139,15 +135,20 @@ def run_lmm_sm(df,
         Residuals for each segment and subject
 
     '''
-    df = df.dropna(subset=[target_col] + covar_cols)
+    import statsmodels.api as sm
+
+    required_cols = [target_col, subj_col] + covar_cols
+    if site_col:
+        required_cols.append(site_col)
+    df = df.dropna(subset=required_cols)
     nsubjs = len(df)
 
     # Convert to long format for LMM
     df = df.melt(
-            id_vars=[col for col in df.columns if "bin_" not in col],
-            var_name="bin",
-            value_name="metric"
-        )
+        id_vars=[col for col in df.columns if not col.startswith('bin_')],# "bin_" not in col],
+        var_name="bin",
+        value_name="metric"
+    )
 
     # Define LMM criteria
     if target_ref_group is not None:
@@ -162,19 +163,27 @@ def run_lmm_sm(df,
 
     df_lmm = []
     residuals = []
-    # Iterate over segments
-    for bin in tqdm(df['bin'].unique(), desc="Bin", disable=disable_tqdm):
-        df_seg = df.loc[df['bin']==bin]
+
+    for bin_name in tqdm(df['bin'].unique(), desc="Bin", disable=disable_tqdm):
+        match = re.match(r'bin_s(\d+)_r(\d+)', bin_name)
+        if not match:
+            logging.warning(f"Could not parse bin name: {bin_name}")
+            continue
+        s_idx, r_idx = int(match.group(1)), int(match.group(2))
+
+        df_seg = df.loc[df['bin']==bin_name].copy()
+        df_seg = df_seg.dropna(subset=required_cols+['metric'])
+
         subjs = df_seg[subj_col].values
         n_subj = np.count_nonzero(df_seg['metric'])
         if  n_subj < min_subjs:
             continue
 
-        # Standardize continuous columns to mean=0 and std=1
-        df_seg.loc[:, 'metric'] = StandardScaler().fit_transform(df_seg[['metric']])
+        # Standardize continuous columns
+        df_seg['metric'] = StandardScaler().fit_transform(df_seg[['metric']])
         if len(cont_cols) > 0:
             for c in cont_cols:
-                df_seg.loc[:, c] = StandardScaler().fit_transform(df_seg[[c]])
+                df_seg[c] = StandardScaler().fit_transform(df_seg[[c]])
 
         # Run LMM
         mdf = sm.MixedLM.from_formula(criteria, 
@@ -194,20 +203,14 @@ def run_lmm_sm(df,
             se = result.bse[v]
             sigma_residual = np.sqrt(result.scale) # residual variance
             d_partial = beta / sigma_residual
-            df_lmm.append([bin, v, pval, beta, t, se, sigma_residual, d_partial, n_subj])
-        residuals.append([bin] + result.resid.values.tolist())
+            df_lmm.append([s_idx, r_idx, v, pval, beta, t, se, sigma_residual, d_partial, n_subj])
+        residuals.append([s_idx, r_idx] + result.resid.values.tolist())
         
-    df_lmm = pd.DataFrame(df_lmm, columns=['Bin', 'Variable', 'p', 'beta', 't', 'se', 
+    df_lmm = pd.DataFrame(df_lmm, columns=['s', 'r', 'Variable', 'p', 'beta', 't', 'se', 
                                            'sigma_residual', 'd_partial','n_subjs'])
-    df_residual = pd.DataFrame(residuals,columns=['Bin'] + subjs.tolist())
+    df_residual = pd.DataFrame(residuals, columns=['s', 'r'] + df[subj_col].unique().tolist())
 
-    # convert profile_s{}_r{} to separate s, r columns
-    def rename_bin(df):
-        s_r = df['Bin'].str.extract(r'bin_s(\d+)_r(\d+)').astype(int)
-        df = df.assign(s=s_r[0], r=s_r[1]).drop(columns=['Bin'])
-        return df
-    
-    return rename_bin(df_lmm), rename_bin(df_residual)
+    return df_lmm, df_residual
 
 
 def run_lmm_pymer4(df, 
@@ -249,12 +252,15 @@ def run_lmm_pymer4(df,
     '''
     from pymer4.models import Lmer
 
-    df = df.dropna(subset=[target_col] + covar_cols)
+    required_cols = [target_col, subj_col] + covar_cols
+    if site_col:
+        required_cols.append(site_col)
+    df = df.dropna(subset=required_cols)
     nsubjs = len(df)
 
     # Convert to long format
     df = df.melt(
-        id_vars=[col for col in df.columns if "bin_" not in col],
+        id_vars=[col for col in df.columns if not col.startswith('bin_')],# "bin_" not in col],
         var_name="bin",
         value_name="metric"
     )
@@ -277,7 +283,15 @@ def run_lmm_pymer4(df,
     residuals = []
 
     for bin_name in tqdm(df['bin'].unique(), desc="Bin", disable=disable_tqdm):
+        match = re.match(r'bin_s(\d+)_r(\d+)', bin_name)
+        if not match:
+            logging.warning(f"Could not parse bin name: {bin_name}")
+            continue
+        s_idx, r_idx = int(match.group(1)), int(match.group(2))
+
         df_seg = df.loc[df['bin'] == bin_name].copy()
+        df_seg = df_seg.dropna(subset=required_cols+['metric'])
+
         subjs = df_seg[subj_col].values
         n_subj = np.count_nonzero(df_seg['metric'])
         if n_subj < min_subjs:
@@ -285,8 +299,9 @@ def run_lmm_pymer4(df,
 
         # Standardize continuous columns
         df_seg['metric'] = StandardScaler().fit_transform(df_seg[['metric']])
-        for c in cont_cols:
-            df_seg[c] = StandardScaler().fit_transform(df_seg[[c]])
+        if len(cont_cols) > 0:
+            for c in cont_cols:
+                df_seg[c] = StandardScaler().fit_transform(df_seg[[c]])
 
         # Fit model with pymer4
         try:
@@ -310,21 +325,16 @@ def run_lmm_pymer4(df,
             sigma_residual = np.sqrt(model.residuals.var())
             d_partial = beta / sigma_residual
             
-            df_lmm.append([bin_name, var_name, pval, beta, t, se, df_satt, 
+            df_lmm.append([s_idx, r_idx, var_name, pval, beta, t, se, df_satt, 
                           sigma_residual, d_partial, n_subj])
         
-        residuals.append([bin_name] + model.residuals.tolist())
+        residuals.append([s_idx, r_idx] + model.residuals.tolist())
 
-    df_lmm = pd.DataFrame(df_lmm, columns=['Bin', 'Variable', 'p', 'beta', 't', 'se', 'df',
+    df_lmm = pd.DataFrame(df_lmm, columns=['s', 'r', 'Variable', 'p', 'beta', 't', 'se', 'df',
                                            'sigma_residual', 'd_partial', 'n_subjs'])
-    df_residual = pd.DataFrame(residuals, columns=['Bin'] + subjs.tolist())
+    df_residual = pd.DataFrame(residuals, columns=['s', 'r'] + df[subj_col].unique().tolist())
 
-    def rename_bin(df):
-        s_r = df['Bin'].str.extract(r'bin_s(\d+)_r(\d+)').astype(int)
-        df = df.assign(s=s_r[0], r=s_r[1]).drop(columns=['Bin'])
-        return df
-
-    return rename_bin(df_lmm), rename_bin(df_residual)
+    return df_lmm, df_residual
 
 def load_stat_as_grid(df, var_name, stat_name, ns, nr):
     '''Helper function for loading statistics from df_lmm as (ns, nr) grid'''

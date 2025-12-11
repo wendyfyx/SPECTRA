@@ -34,6 +34,8 @@ def run(args):
     if args.subject_col == 'subject':
         df = pd.merge(df_meta, df_profile, on='subject')
     else:
+        if 'subject' in df_meta.columns:
+            df_meta = df_meta.drop(columns=['subject'])
         df = pd.merge(df_meta, df_profile, left_on=args.subject_col, 
                       right_on='subject').drop(columns=[args.subject_col])
     

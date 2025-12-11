@@ -26,7 +26,7 @@ from fury.utils import map_coordinates_3d_4d
 
 from tpa.tractometry.parameterization import get_grid_from_atlas, get_centroid
 from tpa.viz.viz_fury import get_cam_settings_fury
-from tpa.viz.colors import color_from_values
+from tpa.viz.colors import color_from_values, alternating_colors
 from tpa.utils.io import load_list
 from tpa.utils.utils import setup_logging, get_wm_mni_path
 
@@ -117,20 +117,33 @@ def run(args):
         if args.bundle_color is not None:
 
             ends = args.bundle_color[0].endswith
+
+            # Compute grids
             s_index, r_index = None, None
+            if not args.centroid_only:
+                s_index, r_index =  _get_sr_index_self(bundle, s_len=args.s_len, r_len=args.r_len)
 
-            if ends('.npy') or ends('.txt'): # Along-tract segment color
+             # Get 1d or 2d color from values
+            if ends('.npy') or ends('.txt'):
                 values = load_list(args.bundle_color[i])
-                if not args.centroid_only:
-                    s_index, r_index =  _get_sr_index_self(bundle, s_len=args.s_len, r_len=args.r_len)
 
-            elif ends('nii.gz'): # Volume color
+             # Per-point color from input volume
+            elif ends('nii.gz'):
                 img_data, affine = load_nifti(args.bundle_color[0]) # only support one volume
                 bundle_native = transform_streamlines(bundle, np.linalg.inv(affine))
                 bundle_native = ArraySequence(bundle_native).get_data()
                 values = map_coordinates_3d_4d(img_data, bundle_native).T
+            
+            # Grid color for 2d
+            elif 'alternate_2d' in args.bundle_color[0].lower():
+                colors = alternating_colors(s_index=s_index, r_index=r_index, 
+                                            pattern=[['red','blue'],['black','white']])
+            elif 'alternate_1d' in args.bundle_color[0].lower():
+                colors = alternating_colors(s_index=s_index, r_index=None, 
+                                            pattern=['blue','white'])
 
-            else: # Per bundle color
+            # Per bundle color by named colors
+            else:
                 colors = np.array(mpl.colors.to_rgba(args.bundle_color[i]))
 
             if values is not None: # Convert along-tract or volume values to color
