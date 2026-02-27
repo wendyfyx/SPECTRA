@@ -61,7 +61,7 @@ def directional_color(bundle):
 
 def alternating_colors(s_index=None, 
                        r_index=None, 
-                       pattern=[['red','blue'],['blue','red']], 
+                       pattern=[['red', 'blue', 'green'], ['black', 'white', 'yellow']], 
                        valid_mask=None):
     """
     Generate RGB colors for points based on optional s_index and r_index,
@@ -73,9 +73,11 @@ def alternating_colors(s_index=None,
         Axial segment indices for each point.
     r_index : array-like, shape (N,), optional
         Radial bin indices for each point.
-    pattern : str, list of 2 colors, or list of list of 2 colors
-        - If list of 2 colors (e.g., ['red','green']), used as 1D checkerboard along s or r.
-        - If list of list of 2 colors (e.g., [[a,b],[c,d]]), used as 2D checkerboard along s and r.
+    pattern : list of colors, or list of list of colors
+        - If list of colors (e.g., ['red','green','blue']), used as 1D repeating
+          pattern along s or r — any length supported.
+        - If list of list of colors (e.g., [[a,b,c],[d,e,f]]), used as 2D pattern
+          along s and r — outer list cycles along s, inner along r.
     valid_mask : array-like, shape (N,), optional
         1 for valid points, 0 for invalid points (marked gray).
         
@@ -85,7 +87,6 @@ def alternating_colors(s_index=None,
         List of RGB tuples for each point.
     """
     
-    # Determine number of points
     if s_index is not None:
         s_index = np.asarray(s_index)
         N = len(s_index)
@@ -102,11 +103,16 @@ def alternating_colors(s_index=None,
     else:
         valid_mask = np.ones(N, dtype=bool)
     
-    colors = np.zeros((N,3))
+    colors = np.zeros((N, 3))
     gray = np.array(mpl.colors.to_rgb('gray'))
     
-    # 2D checkerboard
-    if s_index is not None and r_index is not None and isinstance(pattern, (list, tuple)) and all(isinstance(p, (list, tuple)) for p in pattern):
+    is_2d = (
+        isinstance(pattern, (list, tuple)) and
+        all(isinstance(p, (list, tuple)) for p in pattern)
+    )
+
+    if is_2d and s_index is not None and r_index is not None:
+        # 2D pattern: outer list cycles along s, inner list cycles along r
         r_index = np.asarray(r_index)
         for i in range(N):
             if valid_mask[i]:
@@ -115,12 +121,16 @@ def alternating_colors(s_index=None,
                 colors[i] = mpl.colors.to_rgb(c)
             else:
                 colors[i] = gray
-                
-    # 1D checkerboard
-    elif (s_index is not None or r_index is not None) and isinstance(pattern, (list, tuple)) and len(pattern) == 2:
+
+    else:
+        # 1D pattern: flat list of any length, cycles along s or r
         idx_array = s_index if s_index is not None else r_index
+        n_colors = len(pattern)
         for i in range(N):
-            colors[i] = mpl.colors.to_rgb(pattern[idx_array[i] % 2]) if valid_mask[i] else gray
+            if valid_mask[i]:
+                colors[i] = mpl.colors.to_rgb(pattern[idx_array[i] % n_colors])
+            else:
+                colors[i] = gray
 
     return [tuple(c) for c in colors]
 

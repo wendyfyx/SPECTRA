@@ -215,7 +215,7 @@ def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
         colors = alternating_colors(
             s_index=s_index,
             r_index=None,
-            pattern=['blue', 'red'],
+            pattern=['red', 'blue', 'orange'],
             valid_mask=None,
         )
 
@@ -244,13 +244,58 @@ def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
 
     return colors
 
+def _resolve_centroid_colors(centroid, bundle_color_arg, s_index, r_index, args):
+    """
+    Resolve colors for the centroid streamline.
+
+    The centroid has ns points; s_index and r_index are passed in from the
+    already-computed parameterization so this function doesn't recompute them.
+
+    Parameters
+    ----------
+    centroid : np.ndarray, shape (ns, 3)
+    bundle_color_arg : list of str or None
+    s_index : np.ndarray
+        s-coordinates from the parameterization step (used for value-mapped modes).
+    r_index : np.ndarray or None
+        r-coordinates from the parameterization step (used for value-mapped modes).
+    args : argparse.Namespace
+
+    Returns
+    -------
+    colors : array-like or None
+    """
+    ns = len(centroid)
+    c_s = np.arange(ns)
+    c_r = np.zeros(ns, dtype=int)
+
+    if bundle_color_arg is not None:
+        spec = bundle_color_arg[0].lower()
+        if 'alternate_2d' in spec:
+            logging.warning(
+                "alternate_2d requested in centroid mode — r is always 0, "
+                "coloring will behave like alternate_1d."
+            )
+        # Reuse existing resolution logic with centroid indices
+        return _resolve_bundle_colors(
+            ArraySequence([centroid]),
+            bundle_color_arg,
+            s_index=c_s,
+            r_index=c_r,
+            valid_mask=None,
+            args=args,
+            bundle_idx=0,
+        )
+    return None
 
 # ---------------------------------------------------------------------------
 # Actor helpers
 # ---------------------------------------------------------------------------
 
-def _build_bundle_actor(bundle_plot, colors, args, centroid_only=False):
+def _build_bundle_actor(bundle_plot, colors, args, linewidth=None, opacity=None):
     """Build and return a fury actor for the bundle."""
+    lw = linewidth if linewidth is not None else args.linewidth
+    op = opacity if opacity is not None else args.opacity
     if args.as_points:
         return actor.point(
             bundle_plot.get_data(),
@@ -261,11 +306,10 @@ def _build_bundle_actor(bundle_plot, colors, args, centroid_only=False):
         return actor.line(
             bundle_plot,
             fake_tube=args.fake_tube,
-            linewidth=30 if centroid_only else args.linewidth,
+            linewidth=lw,
             colors=colors,
-            opacity=1 if centroid_only else args.opacity,
+            opacity=op,
         )
-
 
 def _add_glass_brain(scene, surf_path):
     """Add a glass-brain surface (NIFTI or GIFTI) to the scene."""
@@ -303,12 +347,16 @@ def _add_glass_brain(scene, surf_path):
         surf_actor.GetProperty().SetOpacity(0.05)
         scene.add(surf_actor)
 
-
 # ---------------------------------------------------------------------------
 # Main run
 # ---------------------------------------------------------------------------
 
 def run(args):
+
+    if args.centroid_only and args.centroid_with_bundle:
+        raise ValueError(
+            "--centroid_only and --centroid_with_bundle are mutually exclusive."
+        )
 
     scene = window.Scene()
     scene.SetBackground(1, 1, 1)
@@ -362,7 +410,7 @@ def run(args):
         # --- Parameterization ---
         s_index, r_index, valid_mask, centroid = None, None, None, None
 
-        if args.centroid_only or args.bundle_color is not None:
+        if args.centroid_only or args.centroid_with_bundle or args.bundle_color is not None:
             s_index, r_index, valid_mask, centroid = _compute_parameterization(
                 bundle, args, ref_bundle=ref_bundle
             )
@@ -370,26 +418,41 @@ def run(args):
             if color_mask is not None:
                 valid_mask = color_mask
 
-        # --- Color resolution ---
-        colors = _resolve_bundle_colors(
-            bundle, args.bundle_color,
-            s_index, r_index, valid_mask,
-            args, bundle_idx=i,
-        )
-
-        # --- Bundle to plot ---
+        # --- Add actor(s) ---
         if args.centroid_only:
-            # Reuse the centroid from parameterization so geometry matches
-            # the profiling/stats step exactly
-            bundle_plot = ArraySequence([centroid])
-        else:
-            bundle_plot = bundle
+            # Colored centroid only — geometry matches the profiling step exactly
+            centroid_colors = _resolve_centroid_colors(
+                centroid, args.bundle_color, s_index, r_index, args
+            )
+            scene.add(_build_bundle_actor(
+                ArraySequence([centroid]), centroid_colors, args,
+                linewidth=35, opacity=1.0,
+            ))
 
-        # --- Add actor ---
-        scene.add(
-            _build_bundle_actor(bundle_plot, colors, args,
-                                centroid_only=args.centroid_only)
-        )
+        elif args.centroid_with_bundle:
+            # Background: full bundle in light gray at fixed low opacity
+            gray = np.array(mpl.colors.to_rgb('lightgray'))
+            scene.add(_build_bundle_actor(
+                bundle, gray, args,
+                linewidth=args.linewidth, opacity=0.1,
+            ))
+            # Foreground: colored centroid added after for correct render order
+            centroid_colors = _resolve_centroid_colors(
+                centroid, args.bundle_color, s_index, r_index, args
+            )
+            scene.add(_build_bundle_actor(
+                ArraySequence([centroid]), centroid_colors, args,
+                linewidth=30, opacity=1.0,
+            ))
+
+        else:
+            # Standard bundle rendering
+            colors = _resolve_bundle_colors(
+                bundle, args.bundle_color,
+                s_index, r_index, valid_mask,
+                args, bundle_idx=i,
+            )
+            scene.add(_build_bundle_actor(bundle, colors, args))
 
     # Glass brain
     if args.glass_brain_fnames is not None:
@@ -468,12 +531,12 @@ def main():
                              '(ns,) or (ns, nr). Cells that are False are colored gray. '
                              'Intended for stats/atlas visualization where some grid cells '
                              'have insufficient subjects.')
-    parser.add_argument('--s_len', '-s', type=int, required=False, default=3,
+    parser.add_argument('--s_len', '-s', type=int, required=False, default=5,
                         help='Length of along-tract segments, must match bundle color file')
-    parser.add_argument('--r_len', '-r', type=int, required=False, default=3,
+    parser.add_argument('--r_len', '-r', type=int, required=False, default=5,
                         help='Length of radial bins, must match bundle color file')
     parser.add_argument('--robust_method', '-robust', type=str, default='linear',
-                        choices=['spline', 'linear'],
+                        choices=['spline', 'linear', 'none'],
                         help='Extrapolation method for robust centroid')
     parser.add_argument('--cmap', '-cmap', type=str, default='YlOrBr_r',
                         help='Colormap name from matplotlib or cmasher, i.e. Blues')
@@ -503,6 +566,9 @@ def main():
     # Plot options
     parser.add_argument('--centroid_only', '-centroid', action='store_true',
                         help='Only plot bundle centroid')
+    parser.add_argument('--centroid_with_bundle', '-centroid_bg', action='store_true',
+                        help='Plot colored centroid over the full bundle in light gray '
+                             '(bundle rendered at fixed opacity=0.2)')
     parser.add_argument('--auto_crop', '-crop', action='store_true',
                         help='Automatically crop image when saving')
     parser.add_argument('--show_bundle', '-show', action='store_true',
