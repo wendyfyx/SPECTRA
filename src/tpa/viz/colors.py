@@ -168,11 +168,11 @@ def color_from_values(values, s_index, r_index=None, valid_mask=None,
     else:
         valid_mask = np.asarray(valid_mask, dtype=bool)
 
-    # ------- Mode 1: Per-point values (N,) -------
+    # Mode 1: Per-point values (N,)
     if values.ndim == 1 and (s_index is None and r_index is None):
         point_values = values
 
-    # ------- Mode 2: 1D grid (ns,) -------
+    # Mode 2: 1D grid (ns,)
     elif values.ndim == 1:
         ns = values.shape[0]
         if s_index is None:
@@ -181,7 +181,7 @@ def color_from_values(values, s_index, r_index=None, valid_mask=None,
             raise ValueError(f"s_index expects ns={ns}, got max {np.max(s_index)}")
         point_values = values[s_index]
 
-    # ------- Mode 3: 2D grid (ns,nr) -------
+    # Mode 3: 2D grid (ns,nr)
     elif values.ndim == 2:
         if s_index is None or r_index is None:
             raise ValueError("2D grid requires both s_index and r_index.")
