@@ -2,7 +2,7 @@ import numpy as np
 import plotly.graph_objects as go
 import matplotlib as mpl
 
-from tpa.viz.colors import directional_color, colors_from_values
+from spectra.viz.colors import directional_color, colors_from_values
 
 def get_cam_settings_plotly(cam_name='Axial'):
     EYE_SCALE=2

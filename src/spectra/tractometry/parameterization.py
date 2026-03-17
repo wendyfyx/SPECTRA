@@ -13,8 +13,8 @@ from dipy.tracking.streamline import set_number_of_points, Streamlines, \
 from dipy.segment.metric import AveragePointwiseEuclideanMetric
 from dipy.segment.clustering import QuickBundles
 
-MERGE_THRESHOLD=0.25
-MASK_THRESHOLD=0.25
+MERGE_THRESHOLD=0.2
+MASK_THRESHOLD=0.2
 
 def get_centroid(bundle, n_points=50, thresh=100):
     '''Get bundle centroid(s) from a bundle with a given distance threshold'''
@@ -37,6 +37,7 @@ def get_n_segment_by_length(atlas_bundle, s_len=5):
 def compute_robust_centroid(
     bundle,
     s_len: float = 5.0,
+    ns: int = None,
     thresh: float = 100.0,
     extrapolate_prop: float = 0.3,
     method: str = 'linear',
@@ -50,9 +51,12 @@ def compute_robust_centroid(
     ----------
     bundle : ArraySequence
         Atlas bundle
-    s_len : float
+    s_len : float, optional
         Target along-tract segment size (mm). Used to compute ns from
-        the extended arc length.
+        the extended arc length. Mutually exclusive with ns.
+    ns : int, optional
+        Target number of along-tract segments. Mutually exclusive with s_len.
+        When specified, s_len is derived from the extended arc length.
     thresh : float
         QuickBundles distance threshold
     extrapolate_prop : float
@@ -71,6 +75,8 @@ def compute_robust_centroid(
         Extended centroid coordinates, evenly spaced in arc-length,
         compatible with get_centroid output.
     """
+    if s_len is None and ns is None:
+        raise ValueError("At least one of s_len or ns must be provided")
     if method not in ('spline', 'linear'):
         raise ValueError(f"method must be 'spline' or 'linear', got '{method}'")
 
@@ -80,6 +86,8 @@ def compute_robust_centroid(
 
     # fallback: QB centroid resampled to the correct ns
     def _fallback():
+        if ns is not None:
+            return np.array(get_centroid(bundle, n_points=ns, thresh=thresh))
         ns_fallback = get_n_segment_by_length(bundle, s_len=s_len)
         return np.array(get_centroid(bundle, n_points=ns_fallback, thresh=thresh))
 
@@ -92,7 +100,7 @@ def compute_robust_centroid(
     if method == 'spline':
         if len(initial_centroid) < 4:
             logging.warning(
-                "compute_robust_centroid: initial centroid has fewer than 4 points, "
+                "Initial centroid has fewer than 4 points, "
                 "cannot fit cubic spline. Falling back."
             )
             return _fallback()
@@ -119,10 +127,12 @@ def compute_robust_centroid(
         tangent_end   /= np.linalg.norm(tangent_end)
 
         # build n_ext extension points on each side, spaced ~s_len apart
-        n_ext = max(1, int(np.round(ext_mm / s_len)))
+        # use a temporary spacing of 1mm when ns-mode is active (refined later)
+        _step = s_len if s_len is not None else 1.0
+        n_ext = max(1, int(np.round(ext_mm / _step)))
         steps = np.arange(1, n_ext + 1)[:, np.newaxis]  # (n_ext, 1)
-        ext_start_pts = initial_centroid[0] + steps * tangent_start * s_len  # (n_ext, 3)
-        ext_end_pts   = initial_centroid[-1] + steps * tangent_end   * s_len  # (n_ext, 3)
+        ext_start_pts = initial_centroid[0] + steps * tangent_start * _step  # (n_ext, 3)
+        ext_end_pts   = initial_centroid[-1] + steps * tangent_end   * _step  # (n_ext, 3)
 
         # prepend/append to centroid (start points in reverse so curve is continuous)
         ext_pts = np.vstack([ext_start_pts[::-1], initial_centroid, ext_end_pts])
@@ -130,13 +140,6 @@ def compute_robust_centroid(
 
     # build cKDTree on extended curve for endpoint projection
     ext_tree = cKDTree(ext_pts)
-    # use integer index directly (works for both spline and linear)
-    idx_vals = np.arange(len(ext_pts))
-
-    logging.info(
-        f"compute_robust_centroid ({method}): centroid_arc_length={centroid_arc_length:.1f}mm, "
-        f"ext_mm={ext_mm:.1f}mm"
-    )
 
     # project streamline endpoints onto the extended curve
     i_starts, i_ends = [], []
@@ -151,7 +154,7 @@ def compute_robust_centroid(
 
     if not i_starts:
         logging.warning(
-            "compute_robust_centroid: no valid streamline endpoints found. Falling back."
+            "No valid streamline endpoints found. Falling back."
         )
         return _fallback()
 
@@ -168,7 +171,7 @@ def compute_robust_centroid(
 
     if i_end <= i_start:
         logging.warning(
-            f"compute_robust_centroid: i_start ({i_start}) >= i_end ({i_end}). Falling back."
+            f"i_start ({i_start}) >= i_end ({i_end}). Falling back."
         )
         return _fallback()
 
@@ -177,17 +180,23 @@ def compute_robust_centroid(
 
     if len(ext_pts_range) < 2:
         logging.warning(
-            "compute_robust_centroid: too few samples in range. Falling back."
+            "Too few samples in range. Falling back."
         )
         return _fallback()
 
     segment_lengths = np.linalg.norm(np.diff(ext_pts_range, axis=0), axis=1)
     arc_length = float(segment_lengths.sum())
 
-    # resample evenly at ns points derived from arc length
-    ns = max(int(np.round(arc_length / s_len)), 1)
+    # Derive ns (and s_len) for resampling
+    if ns is not None:
+        ns_resample = max(ns, 1)
+        s_len_derived = arc_length / ns_resample
+    else:
+        ns_resample = max(int(np.round(arc_length / s_len)), 1)
+        s_len_derived = s_len
+
     cum_lengths = np.concatenate([[0.0], np.cumsum(segment_lengths)])
-    target_lengths = np.linspace(0.0, arc_length, ns)
+    target_lengths = np.linspace(0.0, arc_length, ns_resample)
 
     if method == 'spline':
         # interpolate back to t values then evaluate spline for smooth output
@@ -202,14 +211,14 @@ def compute_robust_centroid(
         ]).T
 
     logging.info(
-        f"compute_robust_centroid: extended centroid from {len(initial_centroid)} "
-        f"to {ns} points (arc_length={arc_length:.1f}mm, s_len={s_len}mm)"
+        f"({method}): extended centroid to {ns_resample} points "
+        f"(arc_length={arc_length:.1f}mm, s_len={s_len_derived:.2f}mm)"
     )
     return robust_centroid
 
-def create_radial_bins(r_signed, r_len=5):
+def create_radial_bins(r_signed, r_len=5.0, nr=None):
     """
-    Bin signed radial distances based on bin length.
+    Bin signed radial distances based on bin length or number of bins.
     Merge bins on the edge if they have too few points.
 
     Parameters
@@ -217,7 +226,9 @@ def create_radial_bins(r_signed, r_len=5):
     r_signed : np.ndarray, shape (M,)
         Signed radial distances for each point
     r_len : float
-        Target radial bin size (mm)
+        Target radial bin size (mm). Used when nr is not set.
+    nr : int, optional
+        Target number of radial bins. When set, takes priority over r_len.
 
     Returns
     -------
@@ -225,32 +236,38 @@ def create_radial_bins(r_signed, r_len=5):
         Bin index for each point
     nr : int
         Total number of bins after merging
-    r_edges: np.nd.array, shape (nr+1, )
+    r_edges: np.ndarray, shape (nr+1, )
         Edges of the radial bins
     """
     r_min, r_max = r_signed.min(), r_signed.max()
-    nr = int(np.ceil((r_max - r_min) / r_len))
-    r_edges = np.linspace(r_min, r_max, nr + 1)
+
+    if nr is not None:
+        nr_target = max(int(nr), 1)
+        r_edges = np.linspace(r_min, r_max, nr_target + 1)
+        nr_bins = nr_target
+    else:
+        nr_bins = int(np.ceil((r_max - r_min) / r_len))
+        r_edges = np.linspace(r_min, r_max, nr_bins + 1)
 
     # Create r_index
     r_index = np.digitize(r_signed, r_edges) - 1
-    r_index = np.clip(r_index, 0, nr - 1)
+    r_index = np.clip(r_index, 0, nr_bins - 1)
 
     # Define point threshold as median point count across bins * 0.2
-    point_count = np.bincount(r_index, minlength=nr)
+    point_count = np.bincount(r_index, minlength=nr_bins)
     thresh = np.median(point_count) * MERGE_THRESHOLD
 
-    # Merge edge bins
+    # Merge edge bins (only when nr is not set)
     merged = False
-    if nr > 1 and point_count[0] < thresh:
+    if nr_bins > 1 and point_count[0] < thresh and not nr:
         # Merge first bin into the second
         r_index[r_index == 0] = 1
         r_edges = r_edges[1:]  # drop first edge
         merged = True
 
-    if nr > 1 and point_count[-1] < thresh:
+    if nr_bins > 1 and point_count[-1] < thresh and not nr:
         # Merge last bin into the previous one
-        r_index[r_index == nr - 1] = nr - 2
+        r_index[r_index == nr_bins - 1] = nr_bins - 2
         r_edges = r_edges[:-1]  # drop last edge
         merged = True
 
@@ -259,13 +276,15 @@ def create_radial_bins(r_signed, r_len=5):
     nr_new = r_index.max() + 1
 
     if merged:
-        logging.debug(f"Merged edge bins to create {nr_new} radial bins (original: {nr})")
+        logging.debug(f"Merged edge bins: new nr={nr_new}, old nr={nr_bins}")
     return r_index, nr_new, r_edges
     
 def get_grid_from_atlas(
     atlas_bundle,
     s_len: float = 5.0,
     r_len: float = 5.0,
+    ns: int = None,
+    nr: int = None,
     use_robust_centroid: bool = False,
     robust_method: str = 'linear',
 ):
@@ -278,9 +297,19 @@ def get_grid_from_atlas(
     atlas_bundle : ArraySequence
         Atlas bundle
     s_len : float
-        Target along-tract segment size (mm)
+        Target along-tract segment size (mm). Default 5.0.
+        Ignored when ns is set.
     r_len : float
-        Target radial bin size (mm)
+        Target radial bin size (mm). Default 5.0.
+        Ignored when nr is set.
+    ns : int, optional
+        Target number of along-tract segments. When set, takes priority
+        over s_len. The actual ns may differ slightly due to terminal
+        segment merging.
+    nr : int, optional
+        Target number of radial bins. When set, takes priority over r_len.
+        When ns is set but nr is not, defaults to 1 (1D mode). The actual
+        nr may differ slightly due to edge bin merging.
     use_robust_centroid : bool
         If True, use compute_robust_centroid to extend the centroid to the
         full arc-length extent of the bundle, avoiding large end segments.
@@ -301,47 +330,63 @@ def get_grid_from_atlas(
         Radial vectors for each along-tract segment
     r_edges:  np.ndarray, shape (nr+1, )
         Edges of radial bins
+    s_len : float
+        Actual along-tract segment size (mm), derived from arc length.
+    r_len : float
+        Actual radial bin size (mm), derived from radial extent.
     """
+    # When ns is set but nr is not, default to 1D (single radial bin)
+    if ns is not None and nr is None:
+        nr = 1
 
     # Create along-tract segments
     if use_robust_centroid:
         centroid = compute_robust_centroid(
             atlas_bundle,
             s_len=s_len,
+            ns=ns,
             thresh=100,
             extrapolate_prop=0.3,
             method=robust_method,
         )
-        ns = len(centroid)
+        ns_actual = len(centroid)
     else:
-        ns = get_n_segment_by_length(atlas_bundle, s_len=s_len)
-        centroid = get_centroid(atlas_bundle, n_points=ns, thresh=100)
+        if ns is not None:
+            ns_actual = ns
+        else:
+            ns_actual = get_n_segment_by_length(atlas_bundle, s_len=s_len)
+        centroid = get_centroid(atlas_bundle, n_points=ns_actual, thresh=100)
 
     points = atlas_bundle.get_data()
     _, s_index = cKDTree(centroid).query(points, k=1)
 
     # Merge terminal segments if they have too few points (same logic as create_radial_bins)
-    point_count = np.bincount(s_index, minlength=ns)
+    point_count = np.bincount(s_index, minlength=ns_actual)
     seg_thresh = np.median(point_count) * MERGE_THRESHOLD
     merged = False
-    if ns > 1 and point_count[0] < seg_thresh:
+    if ns_actual > 1 and point_count[0] < seg_thresh and not ns:
         s_index[s_index == 0] = 1
         merged = True
-    if ns > 1 and point_count[-1] < seg_thresh:
-        s_index[s_index == ns - 1] = ns - 2
+    if ns_actual > 1 and point_count[-1] < seg_thresh and not ns:
+        s_index[s_index == ns_actual - 1] = ns_actual - 2
         merged = True
     if merged:
         _, s_index = np.unique(s_index, return_inverse=True)
-        ns = s_index.max() + 1
-        centroid = centroid[:ns]
-        logging.debug(f"Merged terminal segments: new ns={ns}")
+        ns_actual = s_index.max() + 1
+        logging.debug(f"Merged edge segments: new ns={ns_actual}, old ns={len(centroid)}")
+        centroid = centroid[:ns_actual]
+
+    # Derive actual s_len from centroid arc length
+    s_len_actual = float(
+        np.linalg.norm(np.diff(np.array(centroid), axis=0), axis=1).sum()
+    ) / max(ns_actual - 1, 1)
 
     # Create radial vectors per segment
     tangents = np.gradient(centroid, axis=0)
     tangents /= np.linalg.norm(tangents, axis=1, keepdims=True)
 
     u_vecs = np.zeros_like(tangents)
-    for s in range(ns):
+    for s in range(ns_actual):
         seg_pts = points[s_index == s]
         if len(seg_pts) < 3:
             u_vecs[s] = np.array([0,0,0])
@@ -353,7 +398,7 @@ def get_grid_from_atlas(
         u_vecs[s] = pca.components_[0]
 
     # Flip to ensure continuity along-tract
-    for s in range(1, ns):
+    for s in range(1, ns_actual):
         if np.dot(u_vecs[s], u_vecs[s-1]) < 0:
             u_vecs[s] = -u_vecs[s]
 
@@ -364,11 +409,17 @@ def get_grid_from_atlas(
     # Compute radial bins
     delta = atlas_bundle.get_data() - centroid[s_index]
     r_signed = np.sum(delta * u_vecs[s_index], axis=1)
-    r_index, nr, r_edges = create_radial_bins(r_signed, r_len=r_len)
+    r_index, nr_actual, r_edges = create_radial_bins(r_signed, r_len=r_len, nr=nr)
 
-    logging.info(f"Created 2D signed parameterization in a ({ns}, {nr}) grid")
+    # Derive actual r_len from r_edges span
+    r_len_actual = float(r_edges[-1] - r_edges[0]) / max(nr_actual, 1)
 
-    return s_index, r_index, centroid, u_vecs, r_edges
+    logging.info(
+        f"Created 2D signed parameterization in a ({ns_actual}, {nr_actual}) grid "
+        f"(s_len={s_len_actual:.2f}mm, r_len={r_len_actual:.2f}mm)"
+    )
+
+    return s_index, r_index, centroid, u_vecs, r_edges, s_len_actual, r_len_actual
 
 def parameterize_bundle(bundle, centroid, u_vecs, r_edges):
     """
@@ -421,8 +472,8 @@ def parameterize_bundle(bundle, centroid, u_vecs, r_edges):
     bin_ids = s_index * nr + r_index
     counts = np.bincount(bin_ids, minlength=ns * nr)
     thresh = np.clip(np.median(counts) * MASK_THRESHOLD, 50, 200)
-    logging.info(f"Threshold for points per bin set to {thresh}")
     sparse_bins = np.where(counts < thresh)[0]
+    logging.info(f"Masked {len(sparse_bins)}/{ns*nr} bins with point threshold={thresh}")
     if len(sparse_bins) > 0:
         mask_sparse = np.isin(bin_ids, sparse_bins)
         valid_mask[mask_sparse] = False
@@ -433,7 +484,7 @@ def parameterize_bundle(bundle, centroid, u_vecs, r_edges):
 
 def prepare_bundle_pairs(org_bundle, rec_bundle, use_even_points=True):
     """
-    TPA and BUAN profiling requires bundle in the native space and MNI space
+    SPECTRA and BUAN profiling requires bundle in the native space and MNI space
     Resample both bundle such that they have the same number of points evenly distributed
     per streamline for creating segments. If both bundles have the same number of points and
     `use_even_points=False`, resampling is not performed.
@@ -510,7 +561,6 @@ def buan_profile(org_bundle, s_index, s_dist, ns,
     if seg_counts is not None:
         nonzero_counts = seg_counts[seg_counts > 0]
         seg_thresh =  np.clip(np.median(nonzero_counts) * MASK_THRESHOLD, 50, 200) if len(nonzero_counts) > 0 else 0
-        logging.debug(f"buan_profile: segment point threshold = {seg_thresh:.1f}")
     else:
         seg_thresh = None
     
@@ -520,10 +570,12 @@ def buan_profile(org_bundle, s_index, s_dist, ns,
   
     # Compute weighted mean
     metric_profile = []
+    n_masked = 0
     for i in range(ns):
         # Mask sparse segments if seg_counts provided
         if seg_thresh is not None and seg_counts[i] < seg_thresh:
             metric_profile.append(0)
+            n_masked += 1
             continue
         segment_mask = (s_index==i) & (~np.isnan(metrics_flatten))
         if len(segment_mask)>1:
@@ -534,6 +586,8 @@ def buan_profile(org_bundle, s_index, s_dist, ns,
             metric_profile.append(weighted_mean)
         else:
             metric_profile.append(0)
+    if seg_thresh is not None:
+        logging.debug(f"Masked {n_masked}/{ns} segments for BUAN profile with point threshold={seg_thresh}")
     return np.array(metric_profile)
 
 def grid_profile(org_bundle, s_index, r_index, valid_mask,

@@ -7,7 +7,6 @@ import logging
 import pickle
 import argparse
 import warnings
-from importlib.resources import files
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -15,20 +14,20 @@ import numpy as np
 from nibabel.streamlines.array_sequence import ArraySequence
 
 from dipy.io.image import load_nifti
-from dipy.io.streamline import load_trk
+# from dipy.io.streamline import load_trk
 from dipy.io.surface import load_gifti
-from dipy.stats.analysis import assignment_map
 from dipy.tracking.streamline import transform_streamlines
 from fury import actor, window
 from fury.utils import map_coordinates_3d_4d
 
-from tpa.tractometry.parameterization import (
-    get_grid_from_atlas, get_centroid, parameterize_bundle
+from spectra.tractometry.parameterization import (
+    get_grid_from_atlas, parameterize_bundle
 )
-from tpa.viz.viz_fury import get_cam_settings_fury
-from tpa.viz.colors import color_from_values, alternating_colors
-from tpa.utils.io import load_list
-from tpa.utils.utils import setup_logging, get_wm_mni_path
+from spectra.viz.viz_fury import get_cam_settings_fury
+from spectra.viz.colors import color_from_values, alternating_colors, get_palette
+from spectra.utils.io import load_list
+from spectra.utils.streamline import read_streamlines
+from spectra.utils.utils import setup_logging, get_wm_mni_path
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -117,10 +116,12 @@ def _compute_parameterization(bundle, args, ref_bundle=None):
     use_robust, robust_method = _use_robust_centroid(args.robust_method)
     source = ref_bundle if ref_bundle is not None else bundle
 
-    s_index, r_index, centroid, u_vecs, r_edges = get_grid_from_atlas(
+    s_index, r_index, centroid, u_vecs, r_edges, _, _ = get_grid_from_atlas(
         source,
         s_len=args.s_len,
         r_len=args.r_len,
+        ns=args.ns,
+        nr=args.nr,
         use_robust_centroid=use_robust,
         robust_method=robust_method,
     )
@@ -184,10 +185,18 @@ def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
     values = None
     colors = None
 
-    # --- Load values ---
+    # Load values
     if ends('.npy') or ends('.txt'):
-        # One color file per bundle
-        values = load_list(bundle_color_arg[bundle_idx])
+        try:
+            values = load_list(bundle_color_arg[bundle_idx])
+        except FileNotFoundError:
+            logging.warning(
+                f"Color file not found: {bundle_color_arg[bundle_idx]}. "
+                "Rendering bundle in gray."
+            )
+            n_pts = len(bundle.get_data())
+            gray = np.array([0.5, 0.5, 0.5])
+            colors = [tuple(gray)] * len(bundle.get_data())
 
     elif ends('nii.gz'):
         # Single shared volume — log a warning if multiple were supplied
@@ -203,19 +212,24 @@ def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
 
     elif 'alternate_2d' in spec.lower():
         # 2D checkerboard — apply valid_mask
+        palette = [get_palette('tab20', n_start=0, n_end=2), 
+                   get_palette('tab20', n_start=2, n_end=4)]
+        # palette = [['red', 'blue'], ['black', 'white']]
         colors = alternating_colors(
             s_index=s_index,
             r_index=r_index,
-            pattern=[['red', 'blue'], ['black', 'white']],
+            pattern=palette,
             valid_mask=valid_mask,
         )
 
     elif 'alternate_1d' in spec.lower():
         # 1D checkerboard — no valid_mask (not meaningful at segment level)
+        palette = get_palette('tab20')
+        # palette = get_palette('tab20', n_start=0, n_end=2)
         colors = alternating_colors(
             s_index=s_index,
             r_index=None,
-            pattern=['red', 'blue', 'orange'],
+            pattern=palette,
             valid_mask=None,
         )
 
@@ -305,7 +319,7 @@ def _build_bundle_actor(bundle_plot, colors, args, linewidth=None, opacity=None)
     else:
         return actor.line(
             bundle_plot,
-            fake_tube=args.fake_tube,
+            fake_tube=args.no_tube,
             linewidth=lw,
             colors=colors,
             opacity=op,
@@ -378,12 +392,7 @@ def run(args):
     # Load reference bundle once (shared across all input bundles)
     ref_bundle = None
     if args.ref_bundle_fname is not None:
-        ref_bundle, _ = load_trk(
-            args.ref_bundle_fname, 'same', bbox_valid_check=False
-        ).streamlines, None
-        ref_bundle = load_trk(
-            args.ref_bundle_fname, 'same', bbox_valid_check=False
-        ).streamlines
+        ref_bundle, _, _, _ = read_streamlines(args.ref_bundle_fname)
         logging.info(
             f'Loaded reference bundle ({len(ref_bundle)} streamlines) '
             f'from {args.ref_bundle_fname}.'
@@ -400,9 +409,7 @@ def run(args):
 
     # Plot bundles
     for i, bundle_path in enumerate(args.in_bundle_fnames):
-        bundle = load_trk(
-            bundle_path, 'same', bbox_valid_check=False
-        ).streamlines
+        bundle, _, _, _ = read_streamlines(bundle_path)
         logging.info(
             f'Loaded {len(bundle)} streamlines from {bundle_path}.'
         )
@@ -531,10 +538,15 @@ def main():
                              '(ns,) or (ns, nr). Cells that are False are colored gray. '
                              'Intended for stats/atlas visualization where some grid cells '
                              'have insufficient subjects.')
-    parser.add_argument('--s_len', '-s', type=int, required=False, default=5,
-                        help='Length of along-tract segments, must match bundle color file')
-    parser.add_argument('--r_len', '-r', type=int, required=False, default=5,
-                        help='Length of radial bins, must match bundle color file')
+    parser.add_argument('--s_len', '-s', type=float, required=False, default=5.0,
+                        help='Along-tract segment length (mm). Default 5.0. Ignored when --ns is set.')
+    parser.add_argument('--r_len', '-r', type=float, required=False, default=5.0,
+                        help='Radial bin length (mm). Default 5.0. Ignored when --nr is set. ')
+    parser.add_argument('--ns', '-ns', type=int, required=False, default=None,
+                        help='Number of along-tract segments. When set, overrides --s_len. '
+                             'If set without --nr, defaults to nr=1 (1D mode).')
+    parser.add_argument('--nr', '-nr', type=int, required=False, default=None,
+                        help='Number of radial bins. When set, overrides --r_len.')
     parser.add_argument('--robust_method', '-robust', type=str, default='linear',
                         choices=['spline', 'linear', 'none'],
                         help='Extrapolation method for robust centroid')
@@ -579,8 +591,8 @@ def main():
                         help='Thickness of streamlines')
     parser.add_argument('--opacity', '-a', type=float, default=1,
                         help='Opacity for bundles')
-    parser.add_argument('--fake_tube', '-fake_tube', action='store_true', default=True,
-                        help='Show streamline as fake tube')
+    parser.add_argument('--no_tube', '-no_tube', action='store_false',
+                        help='Do not show streamline as fake tube')
 
     args = parser.parse_args()
     run(args)

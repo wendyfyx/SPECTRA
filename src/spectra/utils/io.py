@@ -6,16 +6,26 @@ from typing import Any, List, Union
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 import nibabel as nib
 from dipy.io.image import load_nifti, save_nifti
 from dipy.io.streamline import load_trk, save_trk
 from dipy.io.stateful_tractogram import Space, StatefulTractogram
 
-from tpa.utils.utils import file_exists
+from spectra.utils.utils import file_exists
 
 ListItem = Union[str, int, float]
 
+def _json_default(obj: Any) -> Any:
+    """Handle non-serializable types for JSON encoding."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 def load_list(filepath, is_str=False):
     """
@@ -115,7 +125,38 @@ def save_json(file_path: str, data: Any, indent: int = 4, force: bool = False) -
         logging.info(f"<{file_path}> already exists")
     else:
         with open(file_path, 'w') as f:
-            json.dump(data, f, indent=indent)
+            json.dump(data, f, indent=indent, default=_json_default)
+
+
+def load_jsonl(file_path: str) -> list[Any]:
+    """
+    Read Python data from a JSONL file (one JSON object per line).
+    
+    Args:
+        file_path: Path to the JSONL file to read.
+        
+    Returns:
+        List of Python objects from the JSONL file.
+    """
+    with open(file_path, 'r') as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def save_jsonl(file_path: str, data: list[Any], force: bool = False) -> None:
+    """
+    Write a list of Python objects to a JSONL file (one JSON object per line).
+    
+    Args:
+        file_path: Path to the JSONL file to write.
+        data: List of Python objects to write.
+        force: If True, overwrite existing file.
+    """
+    if file_exists(file_path) and not force:
+        logging.info(f"<{file_path}> already exists")
+    else:
+        with open(file_path, 'w') as f:
+            for item in data:
+                f.write(json.dumps(item, default=_json_default) + '\n')
 
 
 def save_csv(file_path: str, df: pd.DataFrame, force: bool = False):
@@ -125,15 +166,13 @@ def save_csv(file_path: str, df: pd.DataFrame, force: bool = False):
         df.to_csv(file_path, index=False)
 
 
-def load_streamlines(trk_file):
-    '''Helper function for loading streamlines'''
-    tractogram = load_trk(trk_file, reference='same', bbox_valid_check=False)
-    return tractogram.streamlines, tractogram.affine
+def save_fig(fig: plt.Figure, path: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, bbox_inches='tight', dpi=150)
+    logging.debug(f"Saved figure: {path}")
 
 
-def save_streamlines(streamlines, out_file, ref_file):
-    '''Save streamlines to file given a reference file'''
-    sft = StatefulTractogram(streamlines, ref_file, Space.RASMM)
-    sft.remove_invalid_streamlines()
-    save_trk(sft, out_file, bbox_valid_check=False)
-    logging.info(f'Saved {len(streamlines)} streamlines to {out_file}')
+def save_npy(arr: np.ndarray, path: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    np.save(path, arr)
+    logging.debug(f"Saved array: {path}")

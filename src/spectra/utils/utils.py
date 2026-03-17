@@ -1,3 +1,4 @@
+import os
 import sys
 import logging
 from pathlib import Path
@@ -5,24 +6,39 @@ from importlib.resources import files
 
 import numpy as np
 from scipy.ndimage import label
+from contextlib import contextmanager
 
-def setup_logging():
+def setup_logging(level='INFO'):
     """Setup logging using default config"""
     logging.basicConfig(
         stream=sys.stdout,
-        level="INFO",
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        level=level,
+        format="%(asctime)s [%(levelname)s] [%(name)s:%(module)s.%(funcName)s]: %(message)s",
         encoding='utf-8',
         force=True
     )
 
+@contextmanager
+def suppress_output():
+    """Suppress stdout and stderr."""
+    with open(os.devnull, 'w') as devnull:
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = devnull
+        sys.stderr = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
 def get_t1_mni_path():
     """Get filename of the T1 MNI template"""
-    return str(files("tpa") / "assets" / "mni_icbm152_t1_tal_nlin_asym_09a_masked.nii.gz")
+    return str(files("spectra") / "assets" / "mni_icbm152_t1_tal_nlin_asym_09a_masked.nii.gz")
 
 def get_wm_mni_path():
     """Get filename of the T1 MNI template"""
-    return str(files("tpa") / "assets" / "mni_icbm152_wm_tal_nlin_asym_09a.nii.gz")
+    return str(files("spectra") / "assets" / "mni_icbm152_wm_tal_nlin_asym_09a.nii.gz")
 
 def file_exists(file_path: str) -> bool:
     """
@@ -91,3 +107,13 @@ def clean_mask(mask, min_component_size=8):
         if comp.sum() >= min_component_size:
             clean[comp] = True
     return clean
+
+def safe_float(val):
+    '''Safely extract values, handling None and nan'''
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if np.isnan(f) else f
+    except (TypeError, ValueError):
+        return None

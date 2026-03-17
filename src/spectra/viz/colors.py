@@ -1,11 +1,36 @@
 import logging
+from typing import List, Optional
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+from matplotlib.patches import Patch
+
+
+OKABE_ITO = [
+    '#000000',  # black
+    '#E69F00',  # orange
+    '#56B4E9',  # sky blue
+    '#009E73',  # bluish green
+    '#F0E442',  # yellow
+    '#0072B2',  # blue
+    '#D55E00',  # vermillion
+    '#CC79A7',  # reddish purple
+]
+
+def get_palette(name='okabe', n_start=0, n_end=None):
+    if name=='okabe':
+        n_end = len(OKABE_ITO) if n_end is None else n_end
+        return OKABE_ITO[n_start:n_end]
+    else: 
+        cmap = plt.get_cmap(name)
+        n_end = cmap.N if n_end is None else n_end
+        return [cmap(i) for i in range(cmap.N)][n_start:n_end]
+
 
 def make_colormap(cmap_name, vmin, vmax, vcenter=None, 
                   plot_cmap_label=None, plot_horizontal=True,
-                  show_cmap=False, save_cmap_path="./cmap.png"):
+                  show_cmap=False, save_cmap_path=None):
     '''Make colormap given name and value range'''
     if vcenter is not None and vmin < vcenter:
         norm = mpl.colors.TwoSlopeNorm(vmin=vmin, vmax=vmax, vcenter=vcenter)
@@ -29,39 +54,81 @@ def make_colormap(cmap_name, vmin, vmax, vcenter=None,
             fig.savefig(save_cmap_path, bbox_inches='tight')
     return cmap
 
+def save_legend_fig(
+    labels: List[str],
+    colors: List[str],
+    save_path: Optional[str] = None,
+    orientation: str = 'vertical',
+    edgecolor: str = 'none',
+    fontsize: int = 18,
+    show: bool = False,
+) -> plt.Figure:
+    """
+    Save a standalone legend figure with colored patch entries.
 
-def orient2rgba(orient_vectors, alpha=1.0):
-    if orient_vectors.ndim == 1:
-        r = np.linalg.norm(orient_vectors)
-        orient = np.abs(np.divide(orient_vectors, r, where=r != 0))
-    elif orient_vectors.ndim == 2:
-        orientn = np.sqrt(orient_vectors[:, 0] ** 2 + orient_vectors[:, 1] ** 2 + orient_vectors[:, 2] ** 2)
-        orientn.shape = orientn.shape + (1,)
-        orient = np.abs(np.divide(orient_vectors, orientn, where=orientn != 0))
+    Parameters
+    ----------
+    labels : list of str
+        Legend entry labels, one per patch.
+    colors : list of str
+        Patch face colors, same length as labels.
+    save_path : str, optional
+        If provided, saves the figure to this path.
+    orientation : {'vertical', 'horizontal'}
+        Layout direction of legend entries. 'vertical' stacks entries in a
+        single column; 'horizontal' places them in a single row.
+    edgecolor : str
+        Edge color for each patch. Default 'none' (no border).
+    fontsize : int
+        Font size for legend labels.
+    show : bool
+        If True, call plt.show() after creating the figure.
+
+    Returns
+    -------
+    fig : plt.Figure
+    """
+    if len(labels) != len(colors):
+        raise ValueError(
+            f"labels and colors must have the same length "
+            f"(got {len(labels)} and {len(colors)})"
+        )
+
+    handles = [
+        Patch(facecolor=c, edgecolor=edgecolor, label=lbl)
+        for c, lbl in zip(colors, labels)
+    ]
+
+    ncols = len(labels) if orientation == 'horizontal' else 1
+    # Size figure to content: wider for horizontal, taller for vertical
+    if orientation == 'horizontal':
+        figsize = (2.5 * len(labels), 1.0)
     else:
-        raise IOError("Wrong vector dimension, It should be an array" " with a shape (N, 3)")
+        figsize = (2.5, 0.55 * len(labels))
 
-    ## append alpha channel to the orient
-    if orient_vectors.ndim == 1:
-        rgba = np.concatenate([orient, [alpha]])
-    elif orient_vectors.ndim == 2:
-        alpha_channel = np.full((orient.shape[0], 1), alpha)
-        rgba = np.concatenate([orient, alpha_channel], axis=1)
-    return rgba
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axis('off')
+    ax.legend(
+        handles=handles,
+        loc='center',
+        ncols=ncols,
+        fontsize=fontsize,
+        frameon=True,
+    )
+    fig.tight_layout()
 
-def directional_color(bundle):
-    '''Plot WM bundles with color based on the direction of the streamline (RGB)'''
-    streamline_colors = []
-    for streamline in bundle:
-        diff = np.diff(streamline, axis=0)
-        diff = np.concatenate([diff[:1], diff], axis=0)
-        colors_tract = orient2rgba(np.asarray(diff))
-        streamline_colors.append(colors_tract)
-    return streamline_colors
+    if save_path:
+        fig.savefig(save_path, bbox_inches='tight')
+        logging.info(f"Saved legend figure: {save_path}")
+    if show:
+        plt.show()
 
+    return fig
+
+    
 def alternating_colors(s_index=None, 
                        r_index=None, 
-                       pattern=[['red', 'blue', 'green'], ['black', 'white', 'yellow']], 
+                       pattern=get_palette(), 
                        valid_mask=None):
     """
     Generate RGB colors for points based on optional s_index and r_index,
@@ -218,7 +285,8 @@ def color_from_values(values, s_index, r_index=None, valid_mask=None,
     cmap = make_colormap(cmap, vmin, vmax, vcenter=vcenter, **kwargs)
     colors = cmap.to_rgba(point_values)[:, :3]
 
-    # Assign gray to invalid points
-    colors[~valid_mask] = np.array([0.5, 0.5, 0.5])
+    # Assign gray to invalid points and NaN points
+    nan_mask = ~np.isfinite(point_values)
+    colors[~valid_mask | nan_mask] = np.array([0.5, 0.5, 0.5])
 
     return [tuple(c) for c in colors]
