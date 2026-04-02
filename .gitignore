@@ -5,7 +5,7 @@ dist/
 wheels/
 *.egg-info
 
-# Jupyte notebooks
+# Jupyter notebooks
 notebooks/
 *.ipynb
 
@@ -15,3 +15,13 @@ uv.lock
 
 # Mac files
 .DS_Store
+
+# Archived files
+src/spectra/archive/
+
+# Files for testing
+test_files/
+
+# Files in development
+src/spectra/cli/spectra_lmm_plot.py
+src/spectra/cli/export_mask.py

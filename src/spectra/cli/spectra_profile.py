@@ -2,6 +2,7 @@
 DESCRIPTION:
     Create microstructure profile using 1D (BUAN weighted mean) and 2D (spectra)
     Both 1D and 2D profiles are saved in the same .npz file
+
 USAGE:
     spectra_profile -rec sub01_AF_L_mni.trk \\
                 -org sub01_AF_L.trk -ref atlas_AF_L.trk \\
@@ -92,7 +93,10 @@ def run(args):
 
 def main():
     setup_logging()
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
 
     parser.add_argument('--rec_bundle_fname', '-rec', type=str, required=True, 
                         help="Path to bundle in the MNI space")

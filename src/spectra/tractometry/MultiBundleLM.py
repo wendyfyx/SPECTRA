@@ -36,6 +36,215 @@ except ImportError:
     logging.warning("pymer4 not available, LMM fitting will fail")
 
 
+def _run_hfdr_core(
+    bundle_data: Dict[str, dict],
+    s_len: float,
+    r_len: float,
+    alpha_block: float,
+    alpha_cell: float,
+    use_resel_blocks: bool,
+    combination_method: str,
+) -> 'MultiBundleHFDRResult':
+    """
+    Core hierarchical FDR computation (Benjamini & Heller 2007).
+ 
+    Parameters
+    ----------
+    bundle_data : dict
+        Mapping from grid/bundle name to a dict with keys:
+            grid          : BundleResult
+            valid_mask    : np.ndarray (ns, nr) bool
+            cell_z        : np.ndarray (n_valid,) — signed z-scores per valid cell
+            cell_p        : np.ndarray (n_valid,) — raw p-values per valid cell
+            valid_indices : List[Tuple[int, int]] — (s, r) coords of valid cells
+            l_s           : Optional[float] — Matern length scale along s (mm)
+            l_r           : Optional[float] — Matern length scale along r (mm)
+    s_len : float
+        Grid spacing in s direction (mm).
+    r_len : float
+        Grid spacing in r direction (mm).
+    alpha_block : float
+        Stage 1 BH-FDR threshold across spatial blocks.
+    alpha_cell : float
+        Stage 2 BH-FDR threshold within rejected blocks.
+    use_resel_blocks : bool
+        If True, partition each bundle into RESEL-sized blocks using l_s/l_r.
+        Falls back to a single-bundle block when l_s is None.
+    combination_method : str
+        'simes' or 'stouffer'.
+ 
+    Returns
+    -------
+    MultiBundleHFDRResult
+    """
+    from spectra.detection.fdr import adaptive_weighted_fdr
+ 
+    if not bundle_data:
+        raise RuntimeError("bundle_data is empty — no grids to process")
+ 
+    # Build Stage 1 blocks
+    all_blocks: List[BlockInfo] = []
+ 
+    for bundle, bdata in bundle_data.items():
+        grid = bdata['grid']
+        valid_indices = bdata['valid_indices']
+        cell_z = bdata['cell_z']
+        idx_map = {coord: i for i, coord in enumerate(valid_indices)}
+ 
+        if use_resel_blocks and bdata['l_s'] is None:
+            logging.warning(
+                f"{bundle}: use_resel_blocks=True but l_s is None. "
+                f"Falling back to single-bundle block."
+            )
+ 
+        if use_resel_blocks and bdata['l_s'] is not None:
+            blocks = partition_bundle_into_blocks(
+                ns=grid.ns,
+                nr=grid.nr,
+                mask=bdata['valid_mask'],
+                l_s=bdata['l_s'],
+                s_len=s_len,
+                l_r=bdata['l_r'],
+                r_len=r_len if grid.nr > 1 else None,
+            )
+            if not blocks:
+                blocks = [BlockInfo(
+                    bundle_name=bundle,
+                    block_id=0,
+                    cell_indices=valid_indices,
+                    l_s=bdata['l_s'],
+                    l_r=bdata['l_r'],
+                    s_len=s_len,
+                    r_len=r_len if grid.nr > 1 else None,
+                )]
+                logging.warning(
+                    f"{bundle}: block partition returned empty list, "
+                    f"falling back to single-bundle block"
+                )
+        else:
+            blocks = [BlockInfo(
+                bundle_name=bundle,
+                block_id=0,
+                cell_indices=valid_indices,
+            )]
+ 
+        # Build bundle-level 1D kernel matrices for Stouffer (skipped for Simes)
+        l_s_val = bdata['l_s']
+        l_r_val = bdata['l_r']
+        K_s_bundle = None
+        K_r_bundle = None
+        if combination_method == 'stouffer' and l_s_val is not None:
+            K_s_bundle = build_kernel_matrix(grid.ns, s_len, l_s_val, nu=0.5)
+            if l_r_val is not None and grid.nr > 1:
+                K_r_bundle = build_kernel_matrix(grid.nr, r_len, l_r_val, nu=0.5)
+ 
+        for blk in blocks:
+            blk.bundle_name = bundle
+            blk.combination_method = combination_method
+            block_z_vals = np.array([
+                cell_z[idx_map[coord]]
+                for coord in blk.cell_indices
+                if coord in idx_map
+            ])
+            block_p_vals = np.array([
+                bdata['cell_p'][idx_map[coord]]
+                for coord in blk.cell_indices
+                if coord in idx_map
+            ])
+            if len(block_z_vals) == 0:
+                blk.z = np.nan
+                blk.p = 1.0
+                continue
+ 
+            if combination_method == 'simes':
+                blk.z, blk.p = simes_combine(block_p_vals, block_z_vals)
+            elif K_s_bundle is not None:
+                block_mask = np.zeros((grid.ns, grid.nr), dtype=bool)
+                for s, r in blk.cell_indices:
+                    block_mask[s, r] = True
+                K_block, _ = build_masked_kernel_2d(block_mask, K_s_bundle, K_r_bundle)
+                blk.set_kernel(K_block)
+                blk.z, blk.p = stouffer_combine(block_z_vals, K=blk.K)
+            else:
+                blk.z, blk.p = stouffer_combine(block_z_vals)
+ 
+        all_blocks.extend(blocks)
+ 
+    # Stage 1 BH-FDR across all blocks
+    p_blocks = np.array([blk.p for blk in all_blocks])
+    fdr_result = adaptive_weighted_fdr(
+        p_values=p_blocks,
+        weights=None,
+        alpha=alpha_block,
+        adaptive=False,
+    )
+ 
+    for i, blk in enumerate(all_blocks):
+        blk.p_adj = float(fdr_result['p_corr'][i])
+        blk.significant = blk.p_adj < alpha_block
+ 
+    rejected_mask = fdr_result['p_corr'] < alpha_block
+    if rejected_mask.any():
+        u1 = float(p_blocks[rejected_mask].max())
+    else:
+        u1 = alpha_block
+ 
+    n_blocks_sig = int(rejected_mask.sum())
+    logging.info(
+        f"Stage 1: {n_blocks_sig}/{len(all_blocks)} blocks rejected "
+        f"at u1={u1:.4f} (pi0={fdr_result['pi0']:.3f})"
+    )
+ 
+    # Stage 2 conditional p-values for cells in rejected blocks 
+    grids: Dict[str, BundleResult] = {}
+    for bundle, bdata in bundle_data.items():
+        grid = bdata['grid']
+        grid.p_corr = np.full((grid.ns, grid.nr), np.nan)
+        grid.sig_mask = np.zeros((grid.ns, grid.nr), dtype=bool)
+        grids[bundle] = grid
+ 
+    p_cond_by_cell: Dict[Tuple[str, int, int], float] = {}
+ 
+    for blk in all_blocks:
+        if not blk.significant:
+            continue
+ 
+        bdata = bundle_data[blk.bundle_name]
+        valid_indices = bdata['valid_indices']
+        cell_z = bdata['cell_z']
+        idx_map = {coord: i for i, coord in enumerate(valid_indices)}
+ 
+        for local_idx, coord in enumerate(blk.cell_indices):
+            ci = idx_map.get(coord)
+            if ci is None:
+                continue
+            z_cell = cell_z[ci]
+            rho = blk.get_rho(local_idx)
+            p_cond = compute_conditional_pvalue(z_cell, u1, rho)
+            key = (blk.bundle_name, coord[0], coord[1])
+            p_cond_by_cell[key] = p_cond
+ 
+    # Compile result and apply Stage 2 BH-FDR
+    result = MultiBundleHFDRResult(
+        block_results=all_blocks,
+        block_threshold=u1,
+        grids=grids,
+        n_blocks=len(all_blocks),
+        n_blocks_sig=n_blocks_sig,
+        n_cells_tested=0,
+        n_cells_sig=0,
+        alpha_block=alpha_block,
+        alpha_cell=alpha_cell,
+        use_resel_blocks=use_resel_blocks,
+        p_cond_by_cell=p_cond_by_cell,
+    )
+ 
+    logging.info(f"Stage 2: applying BH-FDR at alpha_cell={alpha_cell}")
+    result._apply_stage2_fdr(alpha_cell)
+ 
+    return result
+
+
 class MultiBundleLM:
     """
     Multi-grid LMM analysis with FDR and hierarchical FDR inference.
@@ -705,7 +914,7 @@ class MultiBundleLM:
     def fit_hierarchical_fdr(
         self,
         alpha_block: float = 0.05,
-        alpha_cell: float = 0.25,
+        alpha_cell: float = 0.15,
         use_resel_blocks: bool = True,
         combination_method: str = 'simes',
         save: bool = False,
@@ -713,31 +922,30 @@ class MultiBundleLM:
     ) -> MultiBundleHFDRResult:
         """
         Hierarchical FDR (Benjamini & Heller 2007).
-
+ 
         Stage 1:
         Each bundle is divided into spatial blocks whose size matches the Matern
         correlation length scales estimated from the reduced-model residuals.
         When ``use_resel_blocks=False`` the whole bundle is treated as a single
         block. Within each block, individual cell z-scores are aggregated with
-        the Stouffer method or Simes' test (see ``combination_method``).
-        BH-FDR is applied across all block-level p-values at ``alpha_block``.
-
+        the Stouffer method or Simes' test. BH-FDR is applied across all block-level
+        p-values at ``alpha_block``.
+ 
         Stage 2:
         For each rejected block, conditional p-values are computed for every
         constituent cell (conservative upper-bound formula) and BH-FDR is
         applied within each rejected block at ``alpha_cell``.
-
+ 
         Parameters
         ----------
         alpha_block : float
             FDR level for Stage 1 (block-level), default 0.05.
         alpha_cell : float
             FDR level for Stage 2 (cell-level within rejected blocks),
-            default 0.25.
+            default 0.15.
         use_resel_blocks : bool
             If True (default), subdivide each bundle into RESEL-sized spatial
-            blocks for Stage 1. Length scales are estimated from the reduced
-            model residuals.
+            blocks for Stage 1.
             If False, treat each bundle as a single Stage 1 block.
         combination_method : str
             Stage 1 combination method. Either 'stouffer' or 'simes' (default).
@@ -748,42 +956,34 @@ class MultiBundleLM:
             If True, load pre-computed per-bundle results from
             ``output_dir/observed/`` instead of fitting LMMs.  ``save`` is
             ignored in this mode.  Requires ``output_dir`` to be set.
-
+ 
         Returns
         -------
         MultiBundleHFDRResult
-
-        References
-        ----------
-        Benjamini Y, Heller R (2007). False Discovery Rates for Spatial Signals. JASA.
-        Simes R (1986). An improved Bonferroni procedure for multiple tests of
-        significance. Biometrika 73(3):751-754.
         """
-        from spectra.detection.fdr import adaptive_weighted_fdr
-
         if combination_method not in ('stouffer', 'simes'):
             raise ValueError(
                 f"combination_method must be 'stouffer' or 'simes', got '{combination_method}'"
             )
-
+ 
         if from_saved and save:
             logging.warning(
                 "fit_hierarchical_fdr: from_saved=True, so save=True has no effect"
             )
-
+ 
         mode_str = "RESEL-block" if use_resel_blocks else "bundle"
         logging.info(
             f"Hierarchical FDR Stage 1: {len(self.bundles)} bundles, "
             f"mode={mode_str}, combination={combination_method}, alpha_block={alpha_block}"
         )
-
+ 
         # Pre-load saved grids once if from_saved=True
         if from_saved:
             saved_grids = self.load_observed_results()
-
+ 
         # Fit all bundles and build per-bundle cell z-score maps
         bundle_data = {}
-
+ 
         for bundle in self.bundles:
             if from_saved:
                 if bundle not in saved_grids:
@@ -792,209 +992,48 @@ class MultiBundleLM:
                 grid, l_s, l_r = self._extract_hfdr_inputs(saved_grids[bundle])
             else:
                 grid_full = self._fit_observed_single_grid(
-                    bundle, 
-                    fit_reduced=True, 
+                    bundle,
+                    fit_reduced=True,
                     save=save
                 )
                 if grid_full is None:
                     logging.warning(f"Skipping {bundle} - fitting failed")
                     continue
                 grid, l_s, l_r = self._extract_hfdr_inputs(grid_full)
-
+ 
             valid = grid.mask & ~np.isnan(grid.p_obs)
             if not valid.any():
                 logging.warning(f"Skipping {bundle} - no valid cells")
                 continue
             valid_indices = list(zip(*np.where(valid)))
-
+ 
             t_obs = grid.t_obs[valid]
             p_obs = grid.p_obs[valid]
             z_cells = np.sign(t_obs) * stats.norm.ppf(1 - p_obs / 2)
-            z_cells = np.clip(z_cells, -10, 10)  # clipped to avoid inf
-
+            z_cells = np.clip(z_cells, -10, 10)
+ 
             bundle_data[bundle] = {
                 'grid':          grid,
                 'valid_mask':    valid,
                 'cell_z':        z_cells,
-                'cell_p':        p_obs,        # raw p-values for Simes
+                'cell_p':        p_obs,
                 'valid_indices': valid_indices,
                 'l_s':           l_s,
                 'l_r':           l_r,
             }
-
+ 
         if not bundle_data:
             raise RuntimeError("All bundles failed fitting")
-
-        # Build Stage 1 blocks
-        all_blocks: List[BlockInfo] = []
-
-        for bundle, bdata in bundle_data.items():
-            grid = bdata['grid']
-            valid_indices = bdata['valid_indices']
-            cell_z = bdata['cell_z']
-            idx_map = {coord: i for i, coord in enumerate(valid_indices)}
-
-            if use_resel_blocks and bdata['l_s'] is None:
-                logging.warning(
-                    f"{bundle}: use_resel_blocks=True but l_s is None "
-                    f"(saved results may have been produced without fit_reduced=True). "
-                    f"Falling back to single-bundle block."
-                )
-
-            if use_resel_blocks and bdata['l_s'] is not None:
-                blocks = partition_bundle_into_blocks(
-                    ns=grid.ns,
-                    nr=grid.nr,
-                    mask=bdata['valid_mask'],
-                    l_s=bdata['l_s'],
-                    s_len=self.s_len,
-                    l_r=bdata['l_r'],
-                    r_len=self.r_len if grid.nr > 1 else None,
-                )
-                if not blocks:
-                    blocks = [BlockInfo(
-                        bundle_name=bundle,
-                        block_id=0,
-                        cell_indices=valid_indices,
-                        l_s=bdata['l_s'],
-                        l_r=bdata['l_r'],
-                        s_len=self.s_len,
-                        r_len=self.r_len if grid.nr > 1 else None,
-                    )]
-                    logging.warning(
-                        f"{bundle}: block partition returned empty list, "
-                        f"falling back to single-bundle block"
-                    )
-            else:  # Bundle mode (or length-scale estimation failed): one block
-                blocks = [BlockInfo(
-                    bundle_name=bundle,
-                    block_id=0,
-                    cell_indices=valid_indices,
-                )]
-
-            # Build bundle-level 1D kernel matrices using fitted Matern
-            # (only needed for Stouffer; skipped for Simes)
-            l_s_val = bdata['l_s']
-            l_r_val = bdata['l_r']
-            K_s_bundle = None
-            K_r_bundle = None
-            if combination_method == 'stouffer' and l_s_val is not None:
-                K_s_bundle = build_kernel_matrix(grid.ns, self.s_len, l_s_val, nu=0.5)
-                if l_r_val is not None and grid.nr > 1:
-                    K_r_bundle = build_kernel_matrix(grid.nr, self.r_len, l_r_val, nu=0.5)
-
-            # Compute block-level statistic for each block
-            for blk in blocks:
-                blk.bundle_name = bundle
-                blk.combination_method = combination_method
-                block_z_vals = np.array([
-                    cell_z[idx_map[coord]]
-                    for coord in blk.cell_indices
-                    if coord in idx_map
-                ])
-                block_p_vals = np.array([
-                    bdata['cell_p'][idx_map[coord]]
-                    for coord in blk.cell_indices
-                    if coord in idx_map
-                ])
-                if len(block_z_vals) == 0:
-                    blk.z = np.nan
-                    blk.p = 1.0
-                    continue
-
-                if combination_method == 'simes':
-                    blk.z, blk.p = simes_combine(block_p_vals, block_z_vals)
-                elif K_s_bundle is not None:  # Generalized Stouffer with Matern kernel
-                    block_mask = np.zeros((grid.ns, grid.nr), dtype=bool)
-                    for s, r in blk.cell_indices:
-                        block_mask[s, r] = True
-                    K_block, _ = build_masked_kernel_2d(block_mask, K_s_bundle, K_r_bundle)
-                    blk.set_kernel(K_block)
-                    blk.z, blk.p = stouffer_combine(block_z_vals, K=blk.K)
-                else:  # Independent Stouffer if l_s estimation failed
-                    blk.z, blk.p = stouffer_combine(block_z_vals)
-
-            all_blocks.extend(blocks)
-
-        # Stage 1 FDR across all blocks (uniform weights, non-adaptive)
-        p_blocks = np.array([blk.p for blk in all_blocks])
-
-        fdr_result = adaptive_weighted_fdr(
-            p_values=p_blocks,
-            weights=None,
-            alpha=alpha_block,
-            adaptive=False,
-        )
-
-        for i, blk in enumerate(all_blocks):
-            blk.p_adj = float(fdr_result['p_corr'][i])
-            blk.significant = blk.p_adj < alpha_block
-
-        # u1: maximum raw p-value among rejected blocks
-        rejected_mask = fdr_result['p_corr'] < alpha_block
-        if rejected_mask.any():
-            u1 = float(p_blocks[rejected_mask].max())
-        else:
-            u1 = alpha_block   # conservative fallback
-
-        n_blocks_sig = int(rejected_mask.sum())
-        logging.info(
-            f"Stage 1: {n_blocks_sig}/{len(all_blocks)} blocks rejected "
-            f"at u1={u1:.4f} (pi0={fdr_result['pi0']:.3f})"
-        )
-
-        # Collect Stage 2 conditional p-values for all cells in rejected blocks.
-        logging.info(
-            f"Stage 2: computing conditional p-values for {n_blocks_sig} rejected blocks"
-        )
-
-        # To be filled by _apply_stage2_fdr
-        grids: Dict[str, BundleResult] = {}
-        for bundle, bdata in bundle_data.items():
-            grid = bdata['grid']
-            grid.p_corr = np.full((grid.ns, grid.nr), np.nan)
-            grid.sig_mask = np.zeros((grid.ns, grid.nr), dtype=bool)
-            grids[bundle] = grid
-
-        p_cond_by_cell: Dict[Tuple[str, int, int], float] = {}
-
-        for blk in all_blocks:
-            if not blk.significant:
-                continue
-
-            bdata = bundle_data[blk.bundle_name]
-            valid_indices = bdata['valid_indices']
-            cell_z = bdata['cell_z']
-            idx_map = {coord: i for i, coord in enumerate(valid_indices)}
-
-            for local_idx, coord in enumerate(blk.cell_indices):
-                ci = idx_map.get(coord)
-                if ci is None:
-                    continue
-                z_cell = cell_z[ci]
-                rho = blk.get_rho(local_idx)
-                p_cond = compute_conditional_pvalue(z_cell, u1, rho)
-                key = (blk.bundle_name, coord[0], coord[1])
-                p_cond_by_cell[key] = p_cond
-
-        # Compile result
-        result = MultiBundleHFDRResult(
-            block_results=all_blocks,
-            block_threshold=u1,
-            grids=grids,
-            n_blocks=len(all_blocks),
-            n_blocks_sig=n_blocks_sig,
-            n_cells_tested=0,       # updated by _apply_stage2_fdr
-            n_cells_sig=0,          # updated by _apply_stage2_fdr
+ 
+        result = _run_hfdr_core(
+            bundle_data=bundle_data,
+            s_len=self.s_len,
+            r_len=self.r_len,
             alpha_block=alpha_block,
             alpha_cell=alpha_cell,
             use_resel_blocks=use_resel_blocks,
-            p_cond_by_cell=p_cond_by_cell,
+            combination_method=combination_method,
         )
-
-        # Apply Stage 2 BH-FDR at the requested alpha_cell
-        logging.info(f"Stage 2: applying BH-FDR at alpha_cell={alpha_cell}")
-        result._apply_stage2_fdr(alpha_cell)
-
+ 
         self.grids = result.grids
         return result

@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """
 DESCRIPTION
--------
     Two-stage workflow for FDR- or hFDR-corrected multi-bundle LMM analysis.
 
     1. Run 'single' for each bundle (parallelizable via HPC job arrays).
@@ -16,9 +15,8 @@ DESCRIPTION
        thresholding without re-fitting any models.
 
 USAGE
--------
     # hFDR RESEL — Stage 1 (per bundle)
-    python spectra_lmm_fdr.py single \\
+    spectra_lmm_fdr single \\
         --metadata /data/subjects.csv \\
         --root_dir /data/profiles \\
         --output_dir ./results/hfdr \\
@@ -27,7 +25,7 @@ USAGE
         --stats_mode hfdr_resel
 
     # hFDR RESEL — Stage 2 with alpha_cell sweep
-    python spectra_lmm_fdr.py aggregate \\
+    spectra_lmm_fdr aggregate \\
         --metadata /data/subjects.csv \\
         --root_dir /data/profiles \\
         --output_dir ./results/hfdr \\
@@ -47,16 +45,15 @@ USAGE
         --alpha 0.05 \\
         --adaptive
 
-NOTES
--------
-HFDR vs. FDR
+
+NOTES - HFDR vs. FDR
     We recommend always running Stage 1 (single) with --stats_mode hfdr_resel,
     which fits the reduced mode in addition to the full model, so that all FDR
     and hFDR modes can be applied in Stage 2. If Stage 1 was run with FDR or 
     hFDR-Bundle mode, then running Stage 2 with `hfdr_resel` mode will default 
     to hFDR-Bundle.
 
-TARGET VARIABLE CONFIGURATION
+NOTES - TARGET VARIABLE CONFIGURATION
     The --target_col, --target_ref, and --target_case arguments together
     determine how the outcome variable is modelled.
 
@@ -96,10 +93,6 @@ from spectra.tractometry.results_data import MultiBundleResult, MultiBundleHFDRR
 from spectra.utils.io import load_list
 from spectra.utils.utils import make_directory, setup_logging
 
-
-# ---------------------------------------------------------------------------
-# Argument helpers
-# ---------------------------------------------------------------------------
 
 def add_dataloader_args(parser: argparse.ArgumentParser) -> None:
     """Add BundleProfileLoader arguments to parser."""
@@ -198,10 +191,6 @@ def add_aggregate_args(parser: argparse.ArgumentParser) -> None:
                         help='[hfdr] Stage 1 p-value combination method within blocks')
 
 
-# ---------------------------------------------------------------------------
-# Object helpers
-# ---------------------------------------------------------------------------
-
 def create_dataloader(args, bundles=None) -> BundleProfileLoader:
     """Create BundleProfileLoader from parsed arguments."""
 
@@ -253,10 +242,6 @@ def create_lmm(args, loader: BundleProfileLoader) -> MultiBundleLM:
         output_dir=args.output_dir,
     )
 
-
-# ---------------------------------------------------------------------------
-# Output helpers
-# ---------------------------------------------------------------------------
 
 def save_results(
     result: Union[MultiBundleResult, MultiBundleHFDRResult],
@@ -423,10 +408,6 @@ def run_aggregate(args) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     setup_logging("INFO")
 
@@ -438,7 +419,7 @@ def main():
     # Top-level parser
     parser = argparse.ArgumentParser(
         description='Run FDR- or hFDR-corrected multi-bundle LMM analysis',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest='command', required=True)
 
@@ -447,7 +428,8 @@ def main():
         'single',
         parents=[parent_parser],
         help='Fit observed model for a single bundle (run as HPC job array)',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=__doc__,
     )
     single_parser.add_argument('--bundle', '-bundle', type=str, required=True,
                                help='Bundle name to process')
@@ -457,7 +439,8 @@ def main():
         'aggregate',
         parents=[parent_parser],
         help='Load saved per-bundle results and apply FDR or hFDR correction',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=__doc__,
     )
     add_aggregate_args(agg_parser)
 

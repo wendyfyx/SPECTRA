@@ -1,6 +1,6 @@
 """
 DESCRIPTION:
-    Bundle Visualization with 1D/2D profile color support
+    Run SPECTRA cisualization with 1D/2D profile color support
 """
 import sys
 import logging
@@ -511,7 +511,10 @@ def run(args):
 def main():
     setup_logging()
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument('--in_bundle_fnames', '-i', nargs='+', type=str, required=False,
                         help='Input bundle file(s), i.e. bundle.trk')
     parser.add_argument('--out_image_fname', '-o', type=str, default=None,

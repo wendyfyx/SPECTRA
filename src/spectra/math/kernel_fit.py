@@ -16,7 +16,7 @@ optimization (via log-linear regression), not as the final fitted model.
 
 import logging
 import numpy as np
-from scipy.optimize import minimize, curve_fit
+from scipy.optimize import minimize
 from sklearn.metrics import r2_score, mean_squared_error, explained_variance_score
 
 def matern_correlation(d, l, nu=0.5):
@@ -190,7 +190,7 @@ def fit_matern(lags, rho, n_pairs, delta, nu=0.5,
         bounds = [(l0 * 0.1, l0 * 10)]
         result = minimize(objective, [l0], method='L-BFGS-B', bounds=bounds)
         if not result.success:
-            logging.warn(f"Warning: Optimization did not converge: {result.message}")
+            logging.warning(f"Warning: Optimization did not converge: {result.message}")
         l = result.x[0]
 
         # Evaluate results        

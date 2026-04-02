@@ -20,9 +20,9 @@ def mask_metrics(sig_true: np.ndarray, sig_pred: np.ndarray) -> Dict[str, Any]:
     Parameters
     ----------
     sig_true : np.ndarray
-        Ground truth binary mask (True where effect exists)
+        Ground truth binary mask
     sig_pred : np.ndarray
-        Predicted binary mask (True where significant)
+        Predicted binary mask
     
     Returns
     -------

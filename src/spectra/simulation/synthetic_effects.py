@@ -109,7 +109,7 @@ def create_effect_map(
     """
     is_1d = (nr == 1)
 
-    # --- Parse center ---
+    # Parse center
     if center is None:
         center_s_frac, center_r_frac = 0.5, 0.5
     elif isinstance(center, (int, float)):
@@ -118,7 +118,7 @@ def create_effect_map(
     else:
         center_s_frac, center_r_frac = center
 
-    # --- Parse extent -> sigma in mm ---
+    # Parse extent -> sigma in mm
     if isinstance(extent, (int, float)):
         extent_s, extent_r = float(extent), float(extent)
     else:
@@ -127,7 +127,7 @@ def create_effect_map(
     sigma_s = extent_s * ns * s_len
     sigma_r = extent_r * nr * r_len
 
-    # --- Build coordinate grids and compute normalized distance ---
+    # Build coordinate grids and compute normalized distance
     s_coords = np.arange(ns) * s_len
     center_s_mm = center_s_frac * ns * s_len
 
