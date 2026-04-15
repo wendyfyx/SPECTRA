@@ -486,7 +486,7 @@ class MultiBundleLM:
                 model.fit(summarize=False)
                 return model
         except Exception as e:
-            logging.debug(f"LMM fit failed: {e}")
+            logging.info(f"LMM fit failed: <{e}>")
             return None
 
     def _extract_lmm_stats(self, model) -> Optional[Dict]:
@@ -563,6 +563,9 @@ class MultiBundleLM:
         group_avg, mask, df = self.dataloader.get_bundle_data(bundle, bundle_subjs)
         ns, nr = mask.shape if mask.ndim == 2 else (mask.shape[0], 1)
 
+        if self.target_ref_group is not None and self.target_col in df.columns:
+            df[self.target_col] = df[self.target_col].astype(str)  # object dtype, not Categorical
+
         # Standardize continuous columns
         if self.cont_cols:
             for c in self.cont_cols:
@@ -626,6 +629,7 @@ class MultiBundleLM:
             t, p, beta, se, dof, ci_lower, ci_upper, r2_partial, d_cohen,
             residuals, fitted (if extract_fitted), n_subj_by_bin, fit_mask
         """
+        logging.debug(f"Running LMM with formula: {formula}")
         n_subj_bundle = len(bundle_subjs)
 
         # Initialize output arrays
