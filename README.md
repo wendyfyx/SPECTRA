@@ -14,14 +14,28 @@ cd SPECTRA
 
 If you only need to compute tract profiles or generate visualizations with (`spectra_profile`, `spectra_viz`), install with [uv](https://docs.astral.sh/uv/):
 ```bash
-uv pip install .
+uv sync
 ```
 
-The statistical analysis pipeline (`spectra_lmm_fdr`) requires [`pymer4`](https://github.com/ejolly/pymer4), which depends on R and `lme4`. Because of this R dependency, we recommend installing via conda using the provided environment file:
+The statistical analysis pipeline (`spectra_lmm_fdr`) requires [`pymer4`](https://github.com/ejolly/pymer4), which depends on R. Because of this R dependency, we recommend installing `pymer4` in a independent conda environment
 ```bash
-conda env create -f spectra_env.yml
+# use conda solver
+conda create -n spectra_env -c ejolly -c conda-forge python=3.11 pymer4=0.8.2
 conda activate spectra_env
-uv pip install .
+# OR use mamba solver (faster)
+mamba create -n spectra_env -c ejolly -c conda-forge python=3.11 pymer4=0.8.2
+mamba activate spectra_env
+```
+Then installing SPECTRA with
+```bash
+uv pip install . 
+# OR editable install
+uv pip install -e .
 ```
 
-> **Note:** `pymer4` is not listed as a package dependency and must be installed separately via the conda environment. SPECTRA will import successfully without it, but calls to the `spectra_lmm_fdr` CLI or the `spectra.tractometry.MultiBundleLM` module will fail at runtime if `pymer4` is not available.
+Verify install
+```bash
+spectra_lmm_fdr -h
+```
+
+> **Note:** `pymer4` is not listed as a package dependency and must be installed separately. SPECTRA will import successfully without it, but calls to the `spectra_lmm_fdr` CLI or the `spectra.tractometry.MultiBundleLM` module will fail at runtime if `pymer4` is not available.
