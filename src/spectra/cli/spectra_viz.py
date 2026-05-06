@@ -1,8 +1,8 @@
 """
 DESCRIPTION:
-    Run SPECTRA cisualization with 1D/2D profile color support
+    Run SPECTRA visualization with 1D/2D profile color support
 """
-import sys
+import os
 import logging
 import pickle
 import argparse
@@ -15,7 +15,6 @@ from nibabel.streamlines.array_sequence import ArraySequence
 
 from dipy.io.image import load_nifti
 # from dipy.io.streamline import load_trk
-from dipy.io.surface import load_gifti
 from dipy.tracking.streamline import transform_streamlines
 from fury import actor, window
 from fury.utils import map_coordinates_3d_4d
@@ -23,11 +22,15 @@ from fury.utils import map_coordinates_3d_4d
 from spectra.tractometry.parameterization import (
     get_grid_from_atlas, parameterize_bundle
 )
-from spectra.viz.viz_fury import get_cam_settings_fury
-from spectra.viz.colors import color_from_values, alternating_colors, get_palette
+from spectra.viz.viz_fury import (
+    get_cam_settings_fury, build_bundle_actor, add_glass_brain, render_frame
+)
+from spectra.viz.colors import (
+    color_from_values, alternating_colors, get_palette, is_2d_color_mode
+)
 from spectra.utils.io import load_list
 from spectra.utils.streamline import read_streamlines
-from spectra.utils.utils import setup_logging, get_wm_mni_path
+from spectra.utils.utils import setup_logging
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -56,23 +59,13 @@ def autocrop_png(fname, border=20):
     plt.imsave(fname, img[y0:y1 + 1, x0:x1 + 1])
 
 
-def get_default_glass():
-    from scipy.ndimage import gaussian_filter
-    img, affine = load_nifti(get_wm_mni_path())
-    img[img < 0.25] = 0
-    img = gaussian_filter(img, 0.3)
-    return img, affine
 
-
-def get_default_pial():
-    from nilearn.datasets import load_fsaverage
-    fsaverage_meshes = load_fsaverage()
-    pial_l = fsaverage_meshes['pial'].parts['left']
-    pial_r = fsaverage_meshes['pial'].parts['right']
-    faces_r_shifted = pial_r.faces + len(pial_l.coordinates)
-    vertices = np.vstack((pial_l.coordinates, pial_r.coordinates))
-    faces = np.vstack((pial_l.faces, faces_r_shifted))
-    return vertices, faces
+def _numbered_path(path, k, total):
+    """Insert _cam01, _cam02, … suffix before the extension when total > 1."""
+    if total == 1:
+        return path
+    stem, ext = os.path.splitext(path)
+    return f"{stem}_cam{k + 1:02d}{ext}"
 
 
 # ---------------------------------------------------------------------------
@@ -140,21 +133,6 @@ def _compute_parameterization(bundle, args, ref_bundle=None):
 # Color resolution
 # ---------------------------------------------------------------------------
 
-def _is_2d_color_mode(bundle_color_arg, values):
-    """
-    Return True when the coloring is 2D (grid-level or alternate_2d).
-
-    Used to decide whether to forward valid_mask to the color functions.
-    """
-    if bundle_color_arg is None:
-        return False
-    spec = bundle_color_arg[0].lower()
-    if 'alternate_2d' in spec:
-        return True
-    if values is not None and np.asarray(values).squeeze().ndim == 2:
-        return True
-    return False
-
 
 def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
                            valid_mask, args, bundle_idx):
@@ -184,6 +162,7 @@ def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
     ends = spec.endswith
     values = None
     colors = None
+    _per_point_values = False  # True when values are already per-point (not a grid)
 
     # Load values
     if ends('.npy') or ends('.txt'):
@@ -209,12 +188,12 @@ def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
         bundle_native = transform_streamlines(bundle, np.linalg.inv(affine))
         bundle_native = ArraySequence(bundle_native).get_data()
         values = map_coordinates_3d_4d(img_data, bundle_native).T
+        _per_point_values = True  # one value per streamline point, not a grid
 
     elif 'alternate_2d' in spec.lower():
         # 2D checkerboard — apply valid_mask
-        palette = [get_palette('tab20', n_start=0, n_end=2), 
+        palette = [get_palette('tab20', n_start=0, n_end=2),
                    get_palette('tab20', n_start=2, n_end=4)]
-        # palette = [['red', 'blue'], ['black', 'white']]
         colors = alternating_colors(
             s_index=s_index,
             r_index=r_index,
@@ -225,7 +204,6 @@ def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
     elif 'alternate_1d' in spec.lower():
         # 1D checkerboard — no valid_mask (not meaningful at segment level)
         palette = get_palette('tab20')
-        # palette = get_palette('tab20', n_start=0, n_end=2)
         colors = alternating_colors(
             s_index=s_index,
             r_index=None,
@@ -240,11 +218,11 @@ def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
     # Convert values to colors
     if values is not None:
         # Only pass valid_mask for 2D grid values
-        mask_for_colors = valid_mask if _is_2d_color_mode(bundle_color_arg, values) else None
+        mask_for_colors = valid_mask if is_2d_color_mode(bundle_color_arg, values) else None
         colors = color_from_values(
             values,
-            s_index=s_index,
-            r_index=r_index,
+            s_index=None if _per_point_values else s_index,
+            r_index=None if _per_point_values else r_index,
             valid_mask=mask_for_colors,
             cmap=args.cmap,
             vmin=args.vmin,
@@ -257,6 +235,7 @@ def _resolve_bundle_colors(bundle, bundle_color_arg, s_index, r_index,
         )
 
     return colors
+
 
 def _resolve_centroid_colors(centroid, bundle_color_arg, s_index, r_index, args):
     """
@@ -302,92 +281,23 @@ def _resolve_centroid_colors(centroid, bundle_color_arg, s_index, r_index, args)
         )
     return None
 
-# ---------------------------------------------------------------------------
-# Actor helpers
-# ---------------------------------------------------------------------------
-
-def _build_bundle_actor(bundle_plot, colors, args, linewidth=None, opacity=None):
-    """Build and return a fury actor for the bundle."""
-    lw = linewidth if linewidth is not None else args.linewidth
-    op = opacity if opacity is not None else args.opacity
-    if args.as_points:
-        return actor.point(
-            bundle_plot.get_data(),
-            colors=window.colors.green,
-            point_radius=0.2,
-        )
-    else:
-        return actor.line(
-            bundle_plot,
-            fake_tube=args.no_tube,
-            linewidth=lw,
-            colors=colors,
-            opacity=op,
-        )
-
-def _add_glass_brain(scene, surf_path):
-    """Add a glass-brain surface (NIFTI or GIFTI) to the scene."""
-    ends = surf_path.endswith
-
-    if 'default_glass' in surf_path or ends('.nii.gz') or ends('.nii'):
-        if 'default_glass' in surf_path:
-            mask, affine = get_default_glass()
-            logging.info("Using default glass brain...")
-        else:
-            mask, affine = load_nifti(surf_path)
-        scene.add(
-            actor.contour_from_roi(
-                mask,
-                affine=affine,
-                color=np.array([0, 0, 0]),
-                opacity=0.04,
-            )
-        )
-
-    if 'default_pial' in surf_path or ends('.gii.gz') or ends('.gii'):
-        if 'default_pial' in surf_path:
-            vertices, faces = get_default_pial()
-            logging.info('Using default pial surface...')
-        else:
-            surface = load_gifti(surf_path)
-            vertices, faces = surface
-            if not (len(vertices) and len(faces)):
-                warnings.warn(
-                    f"{surf_path} does not have any surface geometry."
-                )
-                return
-        surf_colors = np.zeros((vertices.shape[0], 3))
-        surf_actor = actor.surface(vertices, faces=faces, colors=surf_colors)
-        surf_actor.GetProperty().SetOpacity(0.05)
-        scene.add(surf_actor)
 
 # ---------------------------------------------------------------------------
-# Main run
+# Scene building (run once across all camera frames)
 # ---------------------------------------------------------------------------
 
-def run(args):
+def build_scene(args):
+    """
+    Load bundles, compute colors, and add all actors to a new scene.
 
-    if args.centroid_only and args.centroid_with_bundle:
-        raise ValueError(
-            "--centroid_only and --centroid_with_bundle are mutually exclusive."
-        )
+    The camera is NOT set here — call render_frame() for each camera.
 
+    Returns
+    -------
+    scene : fury.window.Scene
+    """
     scene = window.Scene()
     scene.SetBackground(1, 1, 1)
-
-    # Camera setup
-    if args.in_camera_fname is not None:
-        with open(args.in_camera_fname, 'rb') as f:
-            cam_settings = pickle.load(f)
-        scene.set_camera(
-            position=cam_settings['pos'],
-            focal_point=cam_settings['foc'],
-            view_up=cam_settings['vup'],
-        )
-    else:
-        cam = get_cam_settings_fury(args.cam_view)
-        logging.info(f'Camera is set to {args.cam_view}.')
-        scene.set_camera(**cam)
 
     # Load reference bundle once (shared across all input bundles)
     ref_bundle = None
@@ -427,44 +337,40 @@ def run(args):
 
         # --- Add actor(s) ---
         if args.centroid_only:
-            # Colored centroid only — geometry matches the profiling step exactly
             centroid_colors = _resolve_centroid_colors(
                 centroid, args.bundle_color, s_index, r_index, args
             )
-            scene.add(_build_bundle_actor(
+            scene.add(build_bundle_actor(
                 ArraySequence([centroid]), centroid_colors, args,
                 linewidth=35, opacity=1.0,
             ))
 
         elif args.centroid_with_bundle:
-            # Background: full bundle in light gray at fixed low opacity
             gray = np.array(mpl.colors.to_rgb('lightgray'))
-            scene.add(_build_bundle_actor(
+            scene.add(build_bundle_actor(
                 bundle, gray, args,
                 linewidth=args.linewidth, opacity=0.1,
             ))
-            # Foreground: colored centroid added after for correct render order
             centroid_colors = _resolve_centroid_colors(
                 centroid, args.bundle_color, s_index, r_index, args
             )
-            scene.add(_build_bundle_actor(
+            scene.add(build_bundle_actor(
                 ArraySequence([centroid]), centroid_colors, args,
                 linewidth=30, opacity=1.0,
             ))
 
         else:
-            # Standard bundle rendering
             colors = _resolve_bundle_colors(
                 bundle, args.bundle_color,
                 s_index, r_index, valid_mask,
                 args, bundle_idx=i,
             )
-            scene.add(_build_bundle_actor(bundle, colors, args))
+            scene.add(build_bundle_actor(bundle, colors, args))
 
     # Glass brain
     if args.glass_brain_fnames is not None:
         for surf_path in args.glass_brain_fnames:
-            _add_glass_brain(scene, surf_path)
+            add_glass_brain(scene, surf_path)
 
     # Masks / ROIs
     if args.mask_path is not None:
@@ -485,27 +391,48 @@ def run(args):
                     )
                 )
 
-    # Interactive window
-    if args.show_bundle:
-        window.show(scene, size=(1200, 1200))
+    return scene
 
-    # Save camera
-    if args.out_camera_fname is not None:
+
+# ---------------------------------------------------------------------------
+# Main run
+# ---------------------------------------------------------------------------
+
+def run(args):
+
+    if args.centroid_only and args.centroid_with_bundle:
+        raise ValueError(
+            "--centroid_only and --centroid_with_bundle are mutually exclusive."
+        )
+
+    # Collect camera list and type
+    if args.cam_input:
+        cam_list = args.cam_input
+        cam_type = 'pkl'
+    else:
+        cam_list = args.cam_settings   # list of preset strings, e.g. ['Axial']
+        cam_type = 'preset'
+
+    total = len(cam_list)
+
+    # Build scene once (expensive: load bundles, compute colors, add actors)
+    scene = build_scene(args)
+
+    # Render one frame per camera
+    for k, cam in enumerate(cam_list):
+        out_path = _numbered_path(args.out_image_fname, k, total) \
+            if args.out_image_fname is not None else None
+        render_frame(scene, cam, cam_type, out_path, args, autocrop_fn=autocrop_png)
+
+    # Save camera settings from the last frame
+    if args.cam_output is not None:
         cam_settings = {}
         cam_settings['pos'], cam_settings['foc'], cam_settings['vup'] = (
             scene.get_camera()
         )
-        with open(args.out_camera_fname, 'wb') as f:
-            logging.info(f'Saving camera settings to {args.out_camera_fname}')
+        with open(args.cam_output, 'wb') as f:
+            logging.info(f'Saving camera settings to {args.cam_output}')
             pickle.dump(cam_settings, f)
-
-    # Save snapshot
-    if args.out_image_fname is not None:
-        window.record(scene=scene, size=(1600, 1600),
-                      out_path=args.out_image_fname)
-        if args.auto_crop:
-            autocrop_png(args.out_image_fname)
-        logging.info(f'Saved bundle snapshot to {args.out_image_fname}')
 
 
 def main():
@@ -518,15 +445,20 @@ def main():
     parser.add_argument('--in_bundle_fnames', '-i', nargs='+', type=str, required=False,
                         help='Input bundle file(s), i.e. bundle.trk')
     parser.add_argument('--out_image_fname', '-o', type=str, default=None,
-                        help='Output filepath to save bundle snapshot, i.e. bundle.png')
+                        help='Output filepath to save bundle snapshot, i.e. bundle.png. '
+                             'When multiple cameras are given, _cam01, _cam02, … is '
+                             'inserted before the extension automatically.')
 
     # Camera
-    parser.add_argument('--cam_view', '-cam', type=str, default='Axial',
-                        help='Preset cam view: Axial (default), Saggital_L/R, Coronal_A/P')
-    parser.add_argument('--in_camera_fname', '-si', type=str, default=None,
-                        help='Input camera setting file, i.e ./cam.pkl')
-    parser.add_argument('--out_camera_fname', '-so', type=str, default=None,
-                        help='Output camera setting file, i.e ./cam.pkl')
+    parser.add_argument('--cam_settings', '-cam', nargs='+', type=str, default=['Axial'],
+                        help='Preset camera view(s): Axial (default), Sagittal_L/R, '
+                             'Coronal_A/P. Accepts multiple values, e.g. -cam Axial Sagittal_L')
+    parser.add_argument('--cam_input', '-cam_in', nargs='+', type=str, default=None,
+                        help='Input camera setting file(s), e.g. cam1.pkl cam2.pkl. '
+                             'Takes precedence over --cam_settings when provided.')
+    parser.add_argument('--cam_output', '-cam_out', type=str, default=None,
+                        help='Output camera setting file (single), i.e. ./cam.pkl. '
+                             'Saved from the last rendered camera position.')
 
     # Bundle color
     parser.add_argument('--bundle_color', '-c', nargs='*', type=str, default=None,
@@ -544,7 +476,7 @@ def main():
     parser.add_argument('--s_len', '-s', type=float, required=False, default=5.0,
                         help='Along-tract segment length (mm). Default 5.0. Ignored when --ns is set.')
     parser.add_argument('--r_len', '-r', type=float, required=False, default=5.0,
-                        help='Radial bin length (mm). Default 5.0. Ignored when --nr is set. ')
+                        help='Radial bin length (mm). Default 5.0. Ignored when --nr is set.')
     parser.add_argument('--ns', '-ns', type=int, required=False, default=None,
                         help='Number of along-tract segments. When set, overrides --s_len. '
                              'If set without --nr, defaults to nr=1 (1D mode).')
@@ -599,3 +531,6 @@ def main():
 
     args = parser.parse_args()
     run(args)
+
+if __name__ == "__main__":
+    main()

@@ -2,7 +2,7 @@ import numpy as np
 import plotly.graph_objects as go
 import matplotlib as mpl
 
-from spectra.viz.colors import directional_color, colors_from_values
+from spectra.viz.colors import directional_color, color_from_values
 
 def get_cam_settings_plotly(cam_name='Axial'):
     EYE_SCALE=2
@@ -22,7 +22,7 @@ def get_line_trace_multi(lines, fake_tube=True, opacity=1, linecolors=None, **kw
     elif isinstance(linecolors, str):
         colors = [linecolors]*len(lines)
     else:
-        colors = [colors_from_values(vals, plot_cmap=i==0, **kwargs) for i, vals in enumerate(linecolors)]
+        colors = [color_from_values(vals, plot_cmap=i==0, **kwargs) for i, vals in enumerate(linecolors)]
     traces = []
     for i, stream in enumerate(lines):
         points = np.array(stream)

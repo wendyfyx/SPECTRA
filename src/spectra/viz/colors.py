@@ -201,8 +201,52 @@ def alternating_colors(s_index=None,
 
     return [tuple(c) for c in colors]
 
+def orient2rgba(orient_vectors, alpha=1.0):
+    if orient_vectors.ndim == 1:
+        r = np.linalg.norm(orient_vectors)
+        orient = np.abs(np.divide(orient_vectors, r, where=r != 0))
+    elif orient_vectors.ndim == 2:
+        orientn = np.sqrt(orient_vectors[:, 0] ** 2 + orient_vectors[:, 1] ** 2 + orient_vectors[:, 2] ** 2)
+        orientn.shape = orientn.shape + (1,)
+        orient = np.abs(np.divide(orient_vectors, orientn, where=orientn != 0))
+    else:
+        raise IOError("Wrong vector dimension, It should be an array" " with a shape (N, 3)")
 
-def color_from_values(values, s_index, r_index=None, valid_mask=None, 
+    ## append alpha channel to the orient
+    if orient_vectors.ndim == 1:
+        rgba = np.concatenate([orient, [alpha]])
+    elif orient_vectors.ndim == 2:
+        alpha_channel = np.full((orient.shape[0], 1), alpha)
+        rgba = np.concatenate([orient, alpha_channel], axis=1)
+    return rgba
+
+def directional_color(bundle):
+    '''Plot WM bundles with color based on the direction of the streamline (RGB)'''
+    streamline_colors = []
+    for streamline in bundle:
+        diff = np.diff(streamline, axis=0)
+        diff = np.concatenate([diff[:1], diff], axis=0)
+        colors_tract = orient2rgba(np.asarray(diff))
+        streamline_colors.append(colors_tract)
+    return streamline_colors
+
+def is_2d_color_mode(bundle_color_arg, values):
+    """
+    Return True when the coloring is 2D (grid-level or alternate_2d).
+
+    Used to decide whether to forward valid_mask to the color functions.
+    """
+    if bundle_color_arg is None:
+        return False
+    spec = bundle_color_arg[0].lower()
+    if 'alternate_2d' in spec:
+        return True
+    if values is not None and np.asarray(values).squeeze().ndim == 2:
+        return True
+    return False
+
+
+def color_from_values(values, s_index, r_index=None, valid_mask=None,
                 cmap='magma', vmin=None, vmax=None, vcenter=None, **kwargs):
     """
     Map 2D grid values (ns, nr) to RGB colors for individual points.
