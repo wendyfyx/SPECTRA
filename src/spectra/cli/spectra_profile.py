@@ -107,7 +107,7 @@ def main():
     parser.add_argument('--scalar_map_fnames', '-maps', nargs="+", type=str, required=True, 
                         help="Path(s) to scalar maps to project onto tracts")
     parser.add_argument('--profile_fnames', '-profiles', nargs="+", type=str, required=True, 
-                        help="Path(s) to output profile txt files corresponding to each scalar map")
+                        help="Path(s) to output profile files corresponding to each scalar map")
     parser.add_argument('--s_len', '-s', type=int, required=False, default=5, 
                         help="Length of along-tract segments (mm)")
     parser.add_argument('--r_len', '-r', type=int, required=False, default=5, 
