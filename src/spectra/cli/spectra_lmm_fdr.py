@@ -125,8 +125,9 @@ def add_dataloader_args(parser: argparse.ArgumentParser) -> None:
                         help='Reference group for categorical target')
     parser.add_argument('--target_case', '-target_case', type=str, default=None,
                         help='Case group for categorical target')
-    parser.add_argument('--group_col', '-group', type=str, default='site',
-                        help='Column for random effects grouping')
+    parser.add_argument('--group_col', '-group', type=str, default=None,
+                        help='Column for random intercept (e.g. site). If omitted, '
+                        'an ordinary linear regression is fitted instead of an LMM.')
     parser.add_argument('--covar_cols', '-covar', type=str, nargs='*',
                         default=['age', 'sex'],
                         help='Covariate columns')

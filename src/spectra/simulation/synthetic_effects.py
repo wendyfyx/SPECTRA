@@ -8,7 +8,8 @@ from spectra.utils.utils import get_rng
 
 def compute_std_map(raw_data: np.ndarray) -> np.ndarray:
     """
-    Compute standard deviation map across subjects.
+    Compute standard deviation map across subjects. Zeros mark missing
+    values and are excluded.
 
     Parameters
     ----------
@@ -21,7 +22,7 @@ def compute_std_map(raw_data: np.ndarray) -> np.ndarray:
         Shape (ns,) for 1D or (ns, nr) for 2D
     """
     with np.errstate(invalid='ignore'):
-        std_map = np.nanstd(raw_data, axis=0, ddof=1)
+        std_map = np.nanstd(np.where(raw_data != 0, raw_data, np.nan), axis=0, ddof=1)
     return np.nan_to_num(std_map, nan=1.0)
 
 
@@ -270,7 +271,8 @@ def inject_effect_to_array(
     std_map: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    Inject synthetic effects into a raw data array.
+    Inject synthetic effects into a raw data array. Zeros mark missing
+    values and are left unchanged.
 
     Parameters
     ----------
@@ -297,6 +299,7 @@ def inject_effect_to_array(
     else:
         effect_to_add = effect_map * effect_size
 
-    modified_data[subject_mask] += effect_to_add
+    observed = modified_data[subject_mask] != 0
+    modified_data[subject_mask] += effect_to_add * observed
 
     return modified_data

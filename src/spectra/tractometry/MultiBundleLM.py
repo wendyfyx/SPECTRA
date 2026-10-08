@@ -30,9 +30,9 @@ from spectra.detection.hierarchical_fdr import (
 from spectra.utils.utils import get_rng, suppress_output
 
 try:
-    from pymer4.models import Lmer
+    from pymer4.models import Lm, Lmer
 except ImportError:
-    Lmer = None
+    Lm, Lmer = None, None
     logging.warning("pymer4 not available, LMM fitting will fail")
 
 
@@ -342,8 +342,11 @@ class MultiBundleLM:
             )
 
         # Target variable name for LMM output
-        if self.target_ref_group is not None:# and not isinstance(self.target_ref_group, int):
+        # Lmer (R) names the contrast e.g. 'dxAD'; Lm (patsy) names it 'dx[T.AD]'
+        if self.target_ref_group is not None and self.group_col:
             self.target_var_name = f"{self.target_col}{self.target_case_group}"
+        elif self.target_ref_group is not None:
+            self.target_var_name = f"{self.target_col}[T.{self.target_case_group}]"
         else:
             self.target_var_name = self.target_col
 
@@ -482,7 +485,8 @@ class MultiBundleLM:
             raise ImportError("pymer4 is required for LMM fitting")
         try:
             with suppress_output():
-                model = Lmer(formula, data=df)
+                # Without a random-effect group, fall back to ordinary least squares
+                model = Lmer(formula, data=df) if self.group_col else Lm(formula, data=df)
                 model.fit(summarize=False)
                 return model
         except Exception as e:
@@ -578,6 +582,9 @@ class MultiBundleLM:
             var_name='bin',
             value_name='metric'
         )
+        # Zeros mark missing values: drop them before z-scoring so each bin is
+        # fit only on subjects with data (n may differ across bins)
+        df_long = df_long[df_long['metric'] != 0].dropna(subset=['metric'])
         df_long['metric'] = StandardScaler().fit_transform(df_long[['metric']])
 
         bin_cols = [c for c in df.columns if c.startswith('bin_')]
@@ -652,11 +659,7 @@ class MultiBundleLM:
             if s_idx is None or not mask[s_idx, r_idx]:
                 continue
 
-            df_bin = df_long[
-                (df_long['bin'] == bin_name) &
-                (df_long['metric'] != 0) &
-                (df_long['metric'].notna())
-            ].copy()
+            df_bin = df_long[df_long['bin'] == bin_name].copy()
             subj_order = df_bin[self.subj_col].values
 
             n_subj_by_bin[s_idx, r_idx] = len(df_bin)

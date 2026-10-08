@@ -812,10 +812,7 @@ class BundleProfileLoader:
         
         Returns pooled std across subjects at each (s, r) location.
         """
-        raw_data = self.get_raw_data(bundle)
-        with np.errstate(invalid='ignore'):
-            std_map = np.nanstd(raw_data, axis=0, ddof=1)
-        return np.nan_to_num(std_map, nan=1.0)
+        return compute_std_map(self.get_raw_data(bundle))
 
     
     def inject_synthetic_effect(
@@ -900,11 +897,12 @@ class BundleProfileLoader:
                 raw_data, effect_map, effect_size, subject_mask, std_map
             )
             
-            # Compute true Cohen's d from post-injection data
+            # Compute true Cohen's d from post-injection data (zeros = missing)
             ns, nr = mask.shape if mask.ndim == 2 else (mask.shape[0], 1)
             true_d = np.full((ns, nr), np.nan)
-            case_data = raw_data[subject_mask]
-            control_data = raw_data[~subject_mask]
+            observed_data = np.where(raw_data != 0, raw_data, np.nan)
+            case_data = observed_data[subject_mask]
+            control_data = observed_data[~subject_mask]
             
             # Compute Cohen's d at each grid cell using shared utility
             for s in range(ns):
