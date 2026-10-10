@@ -28,5 +28,5 @@ dev = [
 spectra_profile = "spectra.cli.spectra_profile:main"
 spectra_viz = "spectra.cli.spectra_viz:main"
 spectra_lmm_fdr = "spectra.cli.spectra_lmm_fdr:main"
-spectra_lmm_plot = "spectra.cli.spectra_lmm_plot:main"
 spectra_hfdr_external = "spectra.cli.spectra_hfdr_external:main"
+spectra_export_stats = "spectra.cli.spectra_export_stats:main"

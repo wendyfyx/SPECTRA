@@ -23,5 +23,4 @@ src/spectra/archive/
 test_files/
 
 # Files in development
-src/spectra/cli/spectra_lmm_plot.py
 src/spectra/cli/export_mask.py
