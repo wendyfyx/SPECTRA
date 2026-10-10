@@ -6,7 +6,8 @@ response curve). Mirrors the functional style of kernel_fit.py.
 
 Usage
 -----
-    report = fit_curve(x, y, model='gompertz')
+    report = fit_curve(x, y, model='gompertz')            # floor 0, ceiling 1 fixed
+    report = fit_curve(x, y, model='gompertz', L=None, U=None)   # floor and ceiling fitted
     n_80   = predict_x(0.8, report)
     y_hat  = predict_y(300, report)
 """
@@ -23,51 +24,24 @@ from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 # ---------------------------------------------------------------------------
 
 def gompertz(x, L, U, k, x0):
-    """4-parameter Gompertz: asymmetric S-curve."""
+    """Gompertz: asymmetric S-curve with floor L and ceiling U."""
     return L + (U - L) * np.exp(-np.exp(-k * (x - x0)))
 
 
-def logistic_3param(x, k, x0):
-    """3-parameter logistic: floor=0, ceiling=1 fixed."""
-    return 1.0 / (1.0 + np.exp(-k * (x - x0)))
-
-
-def logistic_4param(x, L, U, k, x0):
-    """4-parameter logistic: free floor and ceiling."""
+def logistic(x, L, U, k, x0):
+    """Logistic: symmetric S-curve with floor L and ceiling U."""
     return L + (U - L) / (1.0 + np.exp(-k * (x - x0)))
 
-_MODELS = {
-    'gompertz': {
-        'fn':     gompertz,
-        'params': ['L', 'U', 'k', 'x0'],
-        'p0':     [0.0, 1.0, 0.01, None],   # None -> replaced with median(x)
-        'bounds': ([0.0, 0.0, 1e-6, -np.inf],
-                   [1.0, 1.0,  np.inf, np.inf]),
-    },
-    '3param': {
-        'fn':     logistic_3param,
-        'params': ['k', 'x0'],
-        'p0':     [0.01, None],
-        'bounds': ([1e-6, -np.inf],
-                   [np.inf,  np.inf]),
-    },
-    '4param': {
-        'fn':     logistic_4param,
-        'params': ['L', 'U', 'k', 'x0'],
-        'p0':     [0.0, 1.0, 0.01, None],
-        'bounds': ([0.0, 0.0, 1e-6, -np.inf],
-                   [1.0, 1.0,  np.inf, np.inf]),
-    },
-}
+_MODELS = {'gompertz': gompertz, 'logistic': logistic}
 
 
 # ---------------------------------------------------------------------------
 # public functions
 # ---------------------------------------------------------------------------
 
-def fit_curve(x, y, model='gompertz'):
+def fit_curve(x, y, model='gompertz', L=0.0, U=1.0):
     """
-    Fit a sigmoid or Gompertz curve to (x, y) data.
+    Fit a logistic or Gompertz curve to (x, y) data.
 
     Parameters
     ----------
@@ -76,16 +50,20 @@ def fit_curve(x, y, model='gompertz'):
     y : array-like
         Response values (e.g. recall). Should be in [0, 1].
     model : str
-        One of 'gompertz' (default), '3param', '4param'.
+        One of 'gompertz' (default), 'logistic'.
+    L, U : float or None
+        Floor and ceiling. A number fixes the value (default 0 and 1);
+        None fits it within [0, 1]. k and x0 are always fitted.
 
     Returns
     -------
     report : dict
         Keys:
         - 'model'       : str, model name
-        - 'fn'          : callable, fitted model function
-        - 'popt'        : np.ndarray, fitted parameter values
+        - 'fn'          : callable, model function fn(x, L, U, k, x0)
+        - 'popt'        : np.ndarray, [L, U, k, x0] (fixed and fitted values)
         - 'params'      : dict, {param_name: value}
+        - 'free'        : list of str, names of the fitted parameters
         - 'r2'          : float, R²
         - 'rmse'        : float, root mean squared error (recall units)
         - 'mae'         : float, mean absolute error (recall units)
@@ -101,35 +79,53 @@ def fit_curve(x, y, model='gompertz'):
     if len(x) != len(y):
         raise ValueError(f"x and y must have the same length, got {len(x)} and {len(y)}")
 
-    spec = _MODELS[model]
-    fn = spec['fn']
+    fn = _MODELS[model]
 
-    # Build p0: replace None placeholder for x0 with median(x)
-    p0 = [float(np.median(x)) if v is None else v for v in spec['p0']]
+    # Each parameter: (starting value, lower bound, upper bound)
+    spec = {
+        'L':  (0.0, 0.0, 1.0),
+        'U':  (1.0, 0.0, 1.0),
+        'k':  (0.01, 1e-6, np.inf),
+        'x0': (float(np.median(x)), -np.inf, np.inf),
+    }
+
+    # Fixed parameters keep the value passed in; the rest are fitted
+    fixed = {name: float(v) for name, v in (('L', L), ('U', U)) if v is not None}
+    free  = [name for name in spec if name not in fixed]
+
+    def fn_free(x, *theta):
+        p = {**fixed, **dict(zip(free, theta))}
+        return fn(x, p['L'], p['U'], p['k'], p['x0'])
+
+    p0 = [spec[name][0] for name in free]
 
     converged = True
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            popt, _ = curve_fit(
-                fn, x, y,
+            theta, _ = curve_fit(
+                fn_free, x, y,
                 p0=p0,
-                bounds=spec['bounds'],
+                bounds=([spec[name][1] for name in free],
+                        [spec[name][2] for name in free]),
                 method='trf',
                 maxfev=10_000,
             )
     except Exception as e:
         logging.warning(f"fit_curve: curve_fit failed for model '{model}': {e}")
-        popt = np.array(p0)
+        theta = np.array(p0)
         converged = False
 
+    params = {**fixed, **dict(zip(free, theta))}
+    popt = np.array([params[name] for name in spec])
     y_pred = fn(x, *popt)
 
     report = {
         'model':    model,
         'fn':       fn,
         'popt':     popt,
-        'params':   dict(zip(spec['params'], popt)),
+        'params':   {name: float(params[name]) for name in spec},
+        'free':     free,
         'r2':       float(r2_score(y, y_pred)),
         'rmse':     float(np.sqrt(mean_squared_error(y, y_pred))),
         'mae':      float(mean_absolute_error(y, y_pred)),
@@ -210,7 +206,7 @@ def predict_x(y_target, report, x_search=(1.0, 1e6)):
         if model == 'gompertz':
             # ratio = exp(-exp(-k*(x-x0)))  =>  x = x0 - log(-log(ratio)) / k
             x = x0 - np.log(-np.log(ratio)) / k
-        elif model in ('3param', '4param'):
+        elif model == 'logistic':
             # ratio = 1/(1+exp(-k*(x-x0)))  =>  x = x0 + log(ratio/(1-ratio)) / k
             x = x0 + np.log(ratio / (1.0 - ratio)) / k
         else:
