@@ -5,10 +5,6 @@ dist/
 wheels/
 *.egg-info
 
-# Jupyter notebooks
-notebooks/
-*.ipynb
-
 # Virtual environments
 .venv
 uv.lock
@@ -16,11 +12,15 @@ uv.lock
 # Mac files
 .DS_Store
 
+# Log files
+*.log
+
+# Outputs from running the README examples
+sample_data/*/outputs/
+
 # Archived files
 src/spectra/archive/
 
-# Files for testing
+# Files in testing/development
 test_files/
-
-# Files in development
 src/spectra/cli/export_mask.py
