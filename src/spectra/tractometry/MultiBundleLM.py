@@ -191,8 +191,8 @@ def _run_hfdr_core(
  
     n_blocks_sig = int(rejected_mask.sum())
     logging.info(
-        f"Stage 1: {n_blocks_sig}/{len(all_blocks)} blocks rejected "
-        f"at u1={u1:.4f} (pi0={fdr_result['pi0']:.3f})"
+        f"hFDR Stage 1 (alpha_block={alpha_block}): {n_blocks_sig}/{len(all_blocks)} blocks significant "
+        f"(u1={u1:.4f}, pi0={fdr_result['pi0']:.3f})"
     )
  
     # Stage 2 conditional p-values for cells in rejected blocks 
@@ -239,7 +239,7 @@ def _run_hfdr_core(
         p_cond_by_cell=p_cond_by_cell,
     )
  
-    logging.info(f"Stage 2: applying BH-FDR at alpha_cell={alpha_cell}")
+    logging.debug(f"Stage 2: applying BH-FDR at alpha_cell={alpha_cell}")
     result._apply_stage2_fdr(alpha_cell)
  
     return result
@@ -425,7 +425,7 @@ class MultiBundleLM:
             )
 
         self.grids = grids
-        logging.info(f"Loaded observed results for {len(grids)} bundles")
+        logging.debug(f"Loaded observed results for {len(grids)} bundles")
         return grids
 
     def _extract_hfdr_inputs(
@@ -758,7 +758,7 @@ class MultiBundleLM:
             return None
 
         # 2. Fit full model
-        logging.info(f"Fitting FDR for {bundle} with {n_subj_bundle} subjects ({ns} x {nr})")
+        logging.info(f"Fitting {bundle}: {n_subj_bundle} subjects, {int(mask.sum())} cells (grid {ns} x {nr})")
         first_pass = self._fit_lmm_grid(
             df_long, bin_to_idx, mask, ns, nr, bundle_subjs,
             formula=self.formula,
@@ -800,7 +800,10 @@ class MultiBundleLM:
                 l_s_est, l_r_est = estimate_length_scales(
                     resid_reduced, self.s_len, r_len_for_est
                 )
-                logging.info(f"Length scale for {bundle}: ls={l_s_est}, lr={l_r_est}")
+                msg = f"Length scales for {bundle}: along-tract {l_s_est:.1f} mm"
+                if l_r_est is not None:
+                    msg += f", radial {l_r_est:.1f} mm"
+                logging.info(msg)
             except Exception as e:
                 logging.warning(f"Length scale estimation failed for {bundle}: {e}")
 
@@ -890,6 +893,7 @@ class MultiBundleLM:
         """
         if from_saved:
             grids = self.load_observed_results()
+            logging.info(f"Loaded observed results for {len(grids)} bundles")
             result = MultiBundleResult(grids=grids)
         else:
             for bundle in self.bundles:
@@ -910,10 +914,6 @@ class MultiBundleLM:
             adaptive=adaptive,
             lambda_seq=lambda_seq,
         )
-
-        if adaptive:
-            logging.info(f"Adaptive FDR: pi0={result.pi0_estimate:.3f}, "
-                        f"effective_alpha={result.effective_alpha:.4f}")
 
         self.grids = result.grids
         return result
@@ -987,7 +987,8 @@ class MultiBundleLM:
         # Pre-load saved grids once if from_saved=True
         if from_saved:
             saved_grids = self.load_observed_results()
- 
+            logging.info(f"Loaded observed results for {len(saved_grids)} bundles")
+
         # Fit all bundles and build per-bundle cell z-score maps
         bundle_data = {}
  

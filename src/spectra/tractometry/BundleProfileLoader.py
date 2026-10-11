@@ -334,7 +334,7 @@ class BundleProfileLoader:
             available = bundle_subjs & meta_subjs
             result[bundle] = np.array(sorted(list(available)))
             
-        logging.info(f"Subjects per bundle: " + 
+        logging.info(f"Subjects with a profile and metadata: " +
                     ", ".join(f"{b}={len(s)}" for b, s in result.items()))
         return result
 
@@ -349,7 +349,7 @@ class BundleProfileLoader:
         for bundle_subjs in self.subjects_by_bundle.values():
             union.update(bundle_subjs)
         
-        logging.info(f"Found {len(union)} total subjects (union across {len(self.bundles)} bundles)")
+        logging.debug(f"Found {len(union)} total subjects (union across {len(self.bundles)} bundles)")
         return np.array(sorted(list(union)))
 
     @cached_property

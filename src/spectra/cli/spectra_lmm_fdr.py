@@ -195,12 +195,12 @@ def add_aggregate_args(parser: argparse.ArgumentParser) -> None:
 def create_dataloader(args, bundles=None) -> BundleProfileLoader:
     """Create BundleProfileLoader from parsed arguments."""
 
-    logging.info(f"Loading metadata from {args.metadata}")
+    logging.debug(f"Loading metadata from {args.metadata}")
     metadata_df = pd.read_csv(args.metadata, dtype={args.subj_col: str})
 
     if bundles is None:
         bundles = load_list(args.bundle_list)
-        logging.info(f"Loaded {len(bundles)} bundles from {args.bundle_list}")
+        logging.debug(f"Loaded {len(bundles)} bundles from {args.bundle_list}")
 
     edge_mask = None
     if args.edge_mask is not None:
@@ -326,12 +326,6 @@ def run_single(args) -> None:
     grid = lmm._fit_observed_single_grid(args.bundle, fit_reduced=fit_reduced, save=True)
     if grid is None:
         logging.warning(f"Skipping {args.bundle}: no valid cells or insufficient subjects")
-    else:
-        logging.info(f"Saved observed results: {args.output_dir}/observed/{args.bundle}.npz")
-
-    logging.info(
-        f"Saved observed results: {args.output_dir}/observed/{args.bundle}.npz"
-    )
 
 
 def run_aggregate(args) -> None:

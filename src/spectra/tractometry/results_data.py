@@ -629,7 +629,10 @@ class MultiBundleResult:
         
         self.n_total_tests = len(p_values)
         self.n_significant = sum(g.sig_mask.sum() for g in self.grids.values())
-        logging.info(f"{self.n_significant}/{self.n_total_tests} cells significant")
+        msg = f"BH-FDR (alpha={alpha}): {self.n_significant}/{self.n_total_tests} cells significant"
+        if adaptive:
+            msg += f" (adaptive: pi0={self.pi0_estimate:.3f}, effective_alpha={self.effective_alpha:.4f})"
+        logging.info(msg)
     
     def get_stats_all(self, save_path: Optional[str] = None) -> pd.DataFrame:
         """Get cell-level results as DataFrame."""
@@ -797,7 +800,7 @@ class MultiBundleHFDRResult:
         self.n_cells_tested = n_cells_tested
         self.n_cells_sig = n_cells_sig
         logging.info(
-            f"Stage 2 (alpha_cell={alpha_cell}): "
+            f"hFDR Stage 2 (alpha_cell={alpha_cell}): "
             f"{n_cells_sig}/{n_cells_tested} cells significant"
         )
 
