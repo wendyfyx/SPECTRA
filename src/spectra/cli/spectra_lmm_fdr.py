@@ -196,7 +196,7 @@ def create_dataloader(args, bundles=None) -> BundleProfileLoader:
     """Create BundleProfileLoader from parsed arguments."""
 
     logging.info(f"Loading metadata from {args.metadata}")
-    metadata_df = pd.read_csv(args.metadata)
+    metadata_df = pd.read_csv(args.metadata, dtype={args.subj_col: str})
 
     if bundles is None:
         bundles = load_list(args.bundle_list)

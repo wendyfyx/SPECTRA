@@ -812,11 +812,8 @@ class MultiBundleHFDRResult:
         alpha_cell : float
             New Stage 2 significance threshold (e.g. 0.05, 0.10, 0.25, 0.50).
         """
-        if not self.p_cond_by_cell:
-            raise RuntimeError(
-                "p_cond_by_cell is empty — cannot reapply Stage 2. "
-                "Ensure the result was produced by fit_hierarchical_fdr."
-            )
+        # p_cond_by_cell is empty when Stage 1 rejected no blocks; Stage 2 then
+        # has nothing to test and no cell is significant at any alpha_cell.
         self._apply_stage2_fdr(alpha_cell)
 
     def get_stats_blocks(self, save_path: Optional[str] = None) -> pd.DataFrame:
