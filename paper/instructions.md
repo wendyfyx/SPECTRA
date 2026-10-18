@@ -19,22 +19,22 @@ The cluster scripts are SGE job arrays (`qsub <script>`); each has the `#$` head
 
 ## 1. Profiles
 
-`01_profile.sh` runs `spectra_profile` with 5 mm cells along and across the tract, at least 20 streamlines per bundle, and the linear robust centroid. Run once per cohort (ADNI, HABS-HD). A profile value of 0 marks a cell with no data for that subject.
+`01_profile.sh` runs `spectra_profile` with 5 mm cells along and across the tract, at least 20 streamlines per bundle, and the linear robust centroid. Run once per cohort (ADNI, HABS-HD). A profile value of 0 marks a cell with no data for that subject. When the profiles are loaded for statistics, these cells are treated as missing (NaN): they are excluded from the model fits and receive no injected effect.
 
 ## 2. Synthetic experiments
 > Methods 2.5, Results 3.1
 
 1. **Runs** (`02a_synth_eval.sh`). One task per setting and repetition: peak effect size d ∈ {0.2, 0.5, 0.8}, n ∈ {50, 100, 200, 400, 600, 800, 1000, 1200} per group, B ∈ {5, 10, 15} affected bundles out of 20, diffuse or localized effects, 100 repetitions; 14,400 tasks. Each task calls `02a_synth_eval.py`, which samples 2n controls, injects the effect into one half, fits the models once, and scores BH-FDR, adaptive BH-FDR, hFDR-RESEL and hFDR-BUNDLE against the effect maps. `MODE=2d` gives the main-text results and `MODE=1d` the supplementary ones.
-2. **Aggregation** (`02b_synth_aggregate.py`). Run once per α₂.
+2. **Aggregation** (`02b_synth_aggregate.py`). Run once per α₂. The runs score hFDR at α₂ = 0.05, 0.15 and 0.25, and the paper reports 0.05 and 0.15.
 3. **Figures** (`02c_synth_plot.py`). With the 2D results: block-level sensitivity and FDP (Fig. 5), cell-level sensitivity and FDP (Fig. 6), and the sample size needed for 70% sensitivity from Gompertz fits (Fig. 7). With the 1D results: the figures of Supplementary Section 3.
 
-The injection code is in [`src/spectra/simulation/`](../src/spectra/simulation/), and [`tutorials/spectra_tutorial_synthetic_injection.ipynb`](../tutorials/spectra_tutorial_synthetic_injection.ipynb) walks through one run on the sample data.
+The injection code is in [`src/spectra/simulation/`](../src/spectra/simulation/), and Part 2 of [`tutorials/spectra_tutorial_stats.ipynb`](../tutorials/spectra_tutorial_stats.ipynb) walks through one run on the sample data.
 
 ## 3. Empirical analysis
 > Methods 2.3-2.4, Results 3.2
 
 1. **Model fitting** (`03a_stats_single.sh`). `metric ~ dx + age + sex + (1 | protocol)` at every cell, for 2 modes (1D, 2D) × 4 metrics × 63 bundles. Run once with `target_case=Dementia` and once with `target_case=MCI`.
-2. **Correction** (`03b_stats_aggregate.sh`). BH-FDR at α = 0.05, and hFDR-RESEL with Stage 1 α₁ = 0.05 (Simes) and Stage 2 α₂ = 0.05, 0.15 and 0.25. The detection rates in Table 3 come from the `*__stats_summary*.csv` files.
+2. **Correction** (`03b_stats_aggregate.sh`). BH-FDR at α = 0.05, and hFDR-RESEL with Stage 1 α₁ = 0.05 (Simes) and Stage 2 α₂ = 0.05, 0.15 and 0.25 (the paper reports 0.05 and 0.15). The detection rates in Table 3 come from the `*__stats_summary*.csv` files.
 3. **Maps** (`03c_stats_maps.sh`). `spectra_export_stats -sig_only` writes one Cohen's d grid per bundle (hFDR-RESEL, α₂ = 0.15), and `spectra_viz` colors the atlas bundles with them (Fig. 8a).
 4. **Effect-size distributions** (`03d_plot_cohen_dist.py`). Fig. 8b.
 
